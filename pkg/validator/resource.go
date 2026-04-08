@@ -3,6 +3,7 @@ package validator
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"github.com/pkg/errors"
@@ -16,7 +17,17 @@ import (
 func ResourceValidator(ctx context.Context, k8sClient client.Client, logger logr.Logger, policies interface{}) []error {
 	var errs []error
 
-	for _, policy := range policies.([]interface{}) {
+	// Convert []string in []interface{} if necessary
+	var policySlice []interface{}
+	switch v := policies.(type) {
+	case []string:
+		for _, s := range v {
+			policySlice = append(policySlice, s)
+		}
+	case []interface{}:
+		policySlice = v
+	}
+	for _, policy := range policySlice {
 		policyMap, err := toMap(policy)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("invalid policy type: %v", err))
@@ -41,32 +52,61 @@ func ResourceValidator(ctx context.Context, k8sClient client.Client, logger logr
 			continue
 		}
 
-		selector, ok := spec["selector"].(map[string]interface{})
-		if !ok {
-			errs = append(errs, fmt.Errorf("missing or invalid selector in policy"))
+		var labelMap map[string]string
+
+		if kind == "CiliumNetworkPolicy" {
+			// CILIUM
+			selector, ok := spec["endpointSelector"].(map[string]interface{})
+			if !ok {
+				errs = append(errs, fmt.Errorf("missing endpointSelector in Cilium policy"))
+				continue
+			}
+
+			matchLabels, ok := selector["matchLabels"].(map[string]interface{})
+			if !ok {
+				errs = append(errs, fmt.Errorf("missing matchLabels in Cilium policy"))
+				continue
+			}
+
+			labelMap = make(map[string]string)
+			for key, value := range matchLabels {
+				cleanKey := strings.TrimPrefix(key, "any:")
+				labelMap[cleanKey] = value.(string)
+			}
+
+		} else if kind == "NetworkPolicy" {
+			// Distinguish between Calico (projectcalico.org/v3) and standard NetworkPolicy
+			apiVersion, _ := policyMap["apiVersion"].(string)
+			if strings.Contains(apiVersion, "calico") || strings.Contains(apiVersion, "projectcalico") {
+				// CALICO - use selector string, skip label validation
+				labelMap = map[string]string{}
+				logger.Info("Calico policy detected, skipping label validation")
+			} else {
+				// NetworkPolicy standard Kubernetes
+				selector, ok := spec["podSelector"].(map[string]interface{})
+				if !ok {
+					errs = append(errs, fmt.Errorf("missing podSelector in NetworkPolicy"))
+					continue
+				}
+				matchLabels, _ := selector["matchLabels"].(map[string]interface{})
+				labelMap = make(map[string]string)
+				for key, value := range matchLabels {
+					labelMap[key] = fmt.Sprintf("%v", value)
+				}
+			}
+		} else {
+			errs = append(errs, fmt.Errorf("unsupported policy kind: %s", kind))
 			continue
 		}
 
-		matchLabels, ok := selector["matchLabels"].(map[string]interface{})
-		if !ok {
-			errs = append(errs, fmt.Errorf("missing or invalid matchLabels in policy"))
-			continue
-		}
-
+		// namespace
 		namespace, ok := metadata["namespace"].(string)
 		if !ok {
 			errs = append(errs, fmt.Errorf("missing or invalid namespace in policy"))
 			continue
 		}
 
-		labelMap := make(map[string]string)
-		for key, value := range matchLabels {
-			labelMap[key] = value.(string)
-		}
-
-		selectorLabels := labels.SelectorFromSet(labelMap)
-
-		// Validate namespace existence and status
+		// validate namespace
 		err = validateNamespaces(ctx, k8sClient, namespace)
 		if err != nil {
 			errs = append(errs, err)
@@ -77,9 +117,15 @@ func ResourceValidator(ctx context.Context, k8sClient client.Client, logger logr
 			errs = append(errs, err)
 		}
 
-		err = checkPodExistence(ctx, k8sClient, namespace, selectorLabels)
-		if err != nil {
-			errs = append(errs, err)
+		if len(labelMap) > 0 {
+			selectorLabels := labels.SelectorFromSet(labelMap)
+
+			err = checkPodExistence(ctx, k8sClient, namespace, selectorLabels)
+			if err != nil {
+				errs = append(errs, err)
+			}
+		} else {
+			logger.Info("Skipping pod existence check (no labels available)")
 		}
 
 		if kind == "CiliumNetworkPolicy" {

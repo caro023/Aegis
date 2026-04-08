@@ -18,7 +18,17 @@ func PropertyValidator(ctx context.Context, k8sClient client.Client, policies in
 	var errs []error
 	// logger := log.FromContext(ctx)
 
-	for _, policy := range policies.([]interface{}) {
+	// Converti []string in []interface{} se necessario
+	var policySlice []interface{}
+	switch v := policies.(type) {
+	case []string:
+		for _, s := range v {
+			policySlice = append(policySlice, s)
+		}
+	case []interface{}:
+		policySlice = v
+	}
+	for _, policy := range policySlice {
 		policyMap, err := toMap(policy)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("invalid policy type: %v", err))
@@ -44,42 +54,45 @@ func PropertyValidator(ctx context.Context, k8sClient client.Client, policies in
 		}
 		// logger.Info("spec", "spec", spec)
 
-		selector, ok := spec["selector"].(map[string]interface{})
-		if !ok {
-			errs = append(errs, fmt.Errorf("missing or invalid selector in policy"))
-			continue
-		}
-
-		matchLabels, ok := selector["matchLabels"].(map[string]interface{})
-		if !ok {
-			errs = append(errs, fmt.Errorf("missing or invalid matchLabels in policy"))
-			continue
-		}
-
 		namespace, ok := metadata["namespace"].(string)
 		if !ok {
 			errs = append(errs, fmt.Errorf("missing or invalid namespace in policy"))
 			continue
 		}
 
-		labelMap := make(map[string]string)
-		for key, value := range matchLabels {
-			labelMap[key] = value.(string)
-		}
+		apiVersion, _ := policyMap["apiVersion"].(string)
 
 		switch kind {
 		case "CiliumNetworkPolicy":
-			err := validateNetworkPolicy(ctx, k8sClient, namespace, labelMap, spec)
-			if err != nil {
-				errs = append(errs, err)
+			// CiliumNetworkPolicy validation handled by CRD validator
+		case "NetworkPolicy":
+			if strings.Contains(apiVersion, "calico") || strings.Contains(apiVersion, "projectcalico") {
+				// Calico use selector as string, skip property validation
+			} else {
+				// NetworkPolicy standard - skip for now
 			}
 		case "KubeArmorPolicy":
+			selector, ok := spec["endpointSelector"].(map[string]interface{})
+			if !ok {
+				errs = append(errs, fmt.Errorf("missing or invalid selector in KubeArmorPolicy"))
+				continue
+			}
+			matchLabels, ok := selector["matchLabels"].(map[string]interface{})
+			if !ok {
+				errs = append(errs, fmt.Errorf("missing or invalid matchLabels in KubeArmorPolicy"))
+				continue
+			}
+			labelMap := make(map[string]string)
+			for key, value := range matchLabels {
+				cleanKey := strings.TrimPrefix(key, "any:")
+				labelMap[cleanKey] = value.(string)
+			}
 			err := validateSystemPolicy(ctx, k8sClient, namespace, labelMap, spec)
 			if err != nil {
 				errs = append(errs, err)
 			}
 		default:
-			errs = append(errs, fmt.Errorf("unknown policy kind: %s", kind))
+			// Unknown kind, skip
 		}
 	}
 

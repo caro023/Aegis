@@ -23,12 +23,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/cclab-inu/KubeTeus/pkg/enforcer"
-	"github.com/cclab-inu/KubeTeus/pkg/policyconverter"
 	"github.com/cclab-inu/KubeTeus/pkg/policygenerator"
-	"github.com/cclab-inu/KubeTeus/pkg/promptprocessor"
+	//"github.com/cclab-inu/KubeTeus/pkg/promptprocessor"
 	"github.com/cclab-inu/KubeTeus/pkg/utils"
 	"github.com/cclab-inu/KubeTeus/pkg/validator"
 	"github.com/cclab-inu/KubeTeus/pkg/watcher"
@@ -37,7 +37,9 @@ import (
 	v1 "k8s.io/api/core/v1"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -85,7 +87,7 @@ func (r *KubeTeusReconciler) SetIntent(intent string) {
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
 func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	var finalIntent []string
+	//var finalIntent []string
 	var prompts utils.Prompt
 	var policies utils.Policy
 	var podInfo utils.NetInfo
@@ -98,15 +100,41 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		logger.Info("Intents received. ", "Intent", *r.Intent)
 
-		entities, finalIntent, podInfo, err = promptprocessor.UserEnitityClassifier(ctx, r.Client, *r.Intent)
+		logger.Info("Using raw intent (LLM-based pipeline)")
+
+		// 🔍 Detect CNI
+		cniType, err := detectCNIPlugin(ctx, r.Client)
 		if err != nil {
-			logger.Error(err, "failed to classify intent")
-			return reconcile.Result{}, err
+			logger.Error(err, "failed to detect CNI")
+			return ctrl.Result{}, err
 		}
 
-		logger.Info("Intents catched", "Intent.Entity", entities, "Intent.Prompts", finalIntent, "PodInfo", podInfo)
-		prompts.Network = append(prompts.Network, finalIntent...)
+		// 🔍 Costruisci prompt base
+		var prompt string
 
+		switch cniType {
+		case "cilium":
+			prompt = fmt.Sprintf("%s. Generate a CiliumNetworkPolicy.", *r.Intent)
+
+		case "calico":
+			// Rileva apiVersion Calico testando le API disponibili
+			apiVersion := "crd.projectcalico.org/v1"
+			testList := &unstructured.UnstructuredList{}
+			testList.SetGroupVersionKind(schema.GroupVersionKind{
+				Group:   "crd.projectcalico.org",
+				Version: "v1",
+				Kind:    "NetworkPolicyList",
+			})
+			if err := r.Client.List(ctx, testList, client.InNamespace("default")); err != nil {
+				apiVersion = "projectcalico.org/v3"
+			}
+			prompt = fmt.Sprintf("%s. Generate a CalicoNetworkPolicy with apiVersion: %s.", *r.Intent, apiVersion)
+
+		default:
+			prompt = fmt.Sprintf("%s. Generate a Kubernetes NetworkPolicy.", *r.Intent)
+		}
+
+		prompts.Network = append(prompts.Network, prompt)
 	} else if r.Mode == "user" && (r.Intent == nil || *r.Intent == "") {
 		logger.Info("Intent not found")
 		return doNotRequeue()
@@ -167,14 +195,18 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			}
 			logger.Info("Information Extraction Completed", "NetInfo", netInfo)
 
-			prompts, err = promptprocessor.ConfigPromptBuilder(ctx, r.Client, netInfo)
+			/*prompts, err = promptprocessor.ConfigPromptBuilder(ctx, r.Client, netInfo)
 			if err != nil {
 				logger.Error(err, "failed to build prompts")
 				return reconcile.Result{}, err
-			}
+			}*/
 		}
 	}
 	logger.Info("Prompts created", "Network Prompts", prompts.Network)
+	if len(prompts.Network) == 0 {
+		logger.Error(fmt.Errorf("no prompts generated"), "empty prompt pipeline")
+		return ctrl.Result{}, fmt.Errorf("no prompts generated")
+	}
 
 	for i := 0; i < maxRetries; i++ {
 		policies, err = policygenerator.PolicyGenerator(ctx, r.Client, r.Model, prompts)
@@ -190,13 +222,7 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	logger.Info("Policies generated", "Network Policies", policies.Network)
 
-	processedPolicies, errs := policyconverter.PolicyProcessor(ctx, podInfo, entities, policies)
-	if len(errs) > 0 {
-		logger.Info("Policy Processing Errors", "Errors", errs)
-		return doNotRequeue()
-	}
-
-	validationErrors, err := validator.Validator(ctx, r.Client, logger, podInfo, entities, processedPolicies)
+	validationErrors, err := validator.Validator(ctx, r.Client, logger, podInfo, entities, policies.Network)
 	if err != nil {
 		return requeueWithError(err)
 	}
@@ -204,9 +230,9 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		logger.Info("Identified a misconfiguration of Policy", "ValidationErrors", validationErrors)
 		return doNotRequeue()
 	}
-	logger.Info("Policies verified", "ValidationErrors.Count", len(validationErrors), "Policy.Details", processedPolicies)
+	logger.Info("Policies verified", "ValidationErrors.Count", len(validationErrors), "Policy.Details", policies.Network)
 
-	if err = enforcer.Enforcer(ctx, r.Client, processedPolicies); err != nil {
+	if err = enforcer.Enforcer(ctx, r.Client, policies.Network); err != nil {
 		logger.Error(err, "failed to enforce policy")
 		return doNotRequeue()
 	}
@@ -262,4 +288,26 @@ func (r *KubeTeusReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		WithEventFilter(predicate.GenerationChangedPredicate{}).
 		Named("kubeteus").
 		Complete(r)
+}
+
+func detectCNIPlugin(ctx context.Context, k8sClient client.Client) (string, error) {
+	podList := &v1.PodList{}
+	if err := k8sClient.List(ctx, podList, client.InNamespace("kube-system")); err != nil {
+		return "", err
+	}
+
+	for _, pod := range podList.Items {
+		name := strings.ToLower(pod.Name)
+		switch {
+		case strings.Contains(name, "cilium"):
+			return "cilium", nil
+		case strings.Contains(name, "calico"):
+			return "calico", nil
+		case strings.Contains(name, "antrea"):
+			return "antrea", nil
+		case strings.Contains(name, "weave"):
+			return "weave", nil
+		}
+	}
+	return "unknown", nil
 }

@@ -8,6 +8,8 @@ import (
 
 	"github.com/cclab-inu/KubeTeus/pkg/utils"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -53,6 +55,21 @@ func UserPromptProcessor(ctx context.Context, k8sClient client.Client, intent st
 		}
 	}
 
+	// Add CNI to the prompt
+	for i, intent := range finalIntents {
+		switch cniType {
+		case "cilium":
+			finalIntents[i] = intent + ". Generate a CiliumNetworkPolicy."
+		case "calico":
+			apiVersion := detectCalicoAPIVersion(ctx, k8sClient)
+			finalIntents[i] = intent + ". Generate a CalicoNetworkPolicy with apiVersion: " + apiVersion + "."
+		case "antrea":
+			finalIntents[i] = intent + ". Generate an AntreaNetworkPolicy."
+		default:
+			finalIntents[i] = intent + ". Generate a Kubernetes NetworkPolicy."
+		}
+	}
+
 	return finalIntents, netInfo, otherInfo, nil
 }
 
@@ -76,6 +93,27 @@ func detectCNIPlugin(ctx context.Context, k8sClient client.Client) (string, erro
 		}
 	}
 	return "unknown", nil
+}
+
+func detectCalicoAPIVersion(ctx context.Context, k8sClient client.Client) string {
+	// Search calico's CDR and read group and version
+	exec := func(group, version string) bool {
+		u := &unstructured.UnstructuredList{}
+		u.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   group,
+			Version: version,
+			Kind:    "NetworkPolicyList",
+		})
+		err := k8sClient.List(ctx, u, client.InNamespace("default"))
+		return err == nil
+	}
+	if exec("crd.projectcalico.org", "v1") {
+		return "crd.projectcalico.org/v1"
+	}
+	if exec("projectcalico.org", "v3") {
+		return "projectcalico.org/v3"
+	}
+	return "crd.projectcalico.org/v1"
 }
 
 func processCommonEntities(ctx context.Context, k8sClient client.Client, intent string, entities []utils.Entity) (string, string, utils.NetInfo, bool, bool, error) {
@@ -187,8 +225,9 @@ func processSinglePodWithConfig(ctx context.Context, k8sClient client.Client, in
 	// Fetch the service's label key and value
 	serviceLabelKey, serviceLabelValue, err := getServiceLabel(ctx, k8sClient, netInfo.Namespace, netInfo.ServiceName)
 	if err != nil {
-		logger.Error(err, "Failed to get service label", "serviceName", netInfo.ServiceName)
-		return nil, utils.NetInfo{}, utils.NetInfo{}, err
+		logger.Info("No related pods found for the provided service label")
+		finalIntents = append(finalIntents, intent)
+		return finalIntents, netInfo, otherInfo, nil
 	}
 
 	// List pods with the same label as the service

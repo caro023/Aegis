@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 
+	"fmt"
+	"sigs.k8s.io/yaml"
+
 	"github.com/cclab-inu/KubeTeus/pkg/utils"
 	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -12,8 +15,22 @@ import (
 
 func Validator(ctx context.Context, k8sClient client.Client, logger logr.Logger, podInfo utils.NetInfo, entities []utils.Entity, policies interface{}) ([]error, error) {
 	var validationErrors []error
+
+	// Convert []string in []interface{} if necessary
+	var policySlice []interface{}
+	switch v := policies.(type) {
+	case []string:
+		for _, s := range v {
+			policySlice = append(policySlice, s)
+		}
+	case []interface{}:
+		policySlice = v
+	default:
+		return nil, fmt.Errorf("unsupported policies type: %T", policies)
+	}
+
 	logger.Info("[CRD Validator] CRD Validator started")
-	for _, policy := range policies.([]interface{}) {
+	for _, policy := range policySlice {
 		// Convert policy to map[string]interface{}
 		policyMap, err := toMap(policy)
 		if err != nil {
@@ -48,16 +65,27 @@ func Validator(ctx context.Context, k8sClient client.Client, logger logr.Logger,
 }
 
 func toMap(policy interface{}) (map[string]interface{}, error) {
+	// If it's a YAML string, convert it in JSON
+	if yamlStr, ok := policy.(string); ok {
+		jsonBytes, err := yaml.YAMLToJSON([]byte(yamlStr))
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert YAML to JSON: %v", err)
+		}
+		var policyMap map[string]interface{}
+		if err := json.Unmarshal(jsonBytes, &policyMap); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal JSON: %v", err)
+		}
+		return policyMap, nil
+	}
+
+	// Otherwise serialize and deserialize
 	data, err := json.Marshal(policy)
 	if err != nil {
 		return nil, err
 	}
-
 	var policyMap map[string]interface{}
-	err = json.Unmarshal(data, &policyMap)
-	if err != nil {
+	if err := json.Unmarshal(data, &policyMap); err != nil {
 		return nil, err
 	}
-
 	return policyMap, nil
 }

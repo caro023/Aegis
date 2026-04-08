@@ -1,12 +1,22 @@
 package policygenerator
 
-/*
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os/exec"
+	"regexp"
+	"sync"
+
+	"github.com/cclab-inu/KubeTeus/pkg/utils"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+)
 
 func PolicyGenerator(ctx context.Context, k8sClient client.Client, model string, prompts utils.Prompt) (utils.Policy, error) {
 	var policy utils.Policy
 	logger := log.FromContext(ctx)
 	models := utils.SelectModel(model)
-
 	if len(prompts.Network) > 0 {
 		networkPolicies, err := generatePolicy(ctx, prompts.Network, "http://localhost:5000/generate", models.Network)
 		if err == nil {
@@ -15,7 +25,6 @@ func PolicyGenerator(ctx context.Context, k8sClient client.Client, model string,
 			logger.Error(err, "Network policy generation failed")
 		}
 	}
-
 	return policy, nil
 }
 
@@ -23,22 +32,19 @@ func generatePolicy(ctx context.Context, prompts []string, url string, model str
 	logger := log.FromContext(ctx)
 	var results []string
 	var mu sync.Mutex
-
 	for _, prompt := range prompts {
 		cmd := exec.Command("curl", "-X", "POST", url, "-H", "Content-Type: application/json", "-d", fmt.Sprintf(`{"model": "%s", "prompt": "%s"}`, model, prompt))
-
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		err := cmd.Run()
 		if err != nil {
 			return nil, fmt.Errorf("failed to execute command: %v", err)
 		}
-
 		if cmd.ProcessState.ExitCode() == 0 {
 			logger.Info("Policy generation succeeded", "Output", out.String())
-
 			output := out.String()
-			re := regexp.MustCompile(`(?s)\nkind:.*`)
+			// Match full YAML block starting from apiVersion
+			re := regexp.MustCompile(`(?s)apiVersion:.*`)
 			match := re.FindStringSubmatch(output)
 			if len(match) > 0 {
 				mu.Lock()
@@ -52,9 +58,6 @@ func generatePolicy(ctx context.Context, prompts []string, url string, model str
 			continue
 		}
 	}
-
 	logger.Info("Policy generated", "Result", results)
 	return results, nil
 }
-
-*/

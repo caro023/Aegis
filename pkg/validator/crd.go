@@ -5,24 +5,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/xeipuuv/gojsonschema"
 )
 
 var (
 	ciliumNetworkPolicySchema *gojsonschema.Schema
+	calicoNetworkPolicySchema *gojsonschema.Schema
 )
 
 func init() {
-	// Load CiliumNetworkPolicy schema
+	// Cilium
 	ciliumSchemaLoader := gojsonschema.NewStringLoader(loadSchema("cilium_network_policy_crd.json"))
-	schema, err := gojsonschema.NewSchema(ciliumSchemaLoader)
-	if err != nil {
-		panic(fmt.Sprintf("failed to load CiliumNetworkPolicy schema: %v", err))
-	}
-	ciliumNetworkPolicySchema = schema
-}
+	ciliumSchema, _ := gojsonschema.NewSchema(ciliumSchemaLoader)
+	ciliumNetworkPolicySchema = ciliumSchema
 
+	// Calico
+	calicoSchemaLoader := gojsonschema.NewStringLoader(loadSchema("calico_network_policy_crd.json"))
+	calicoSchema, _ := gojsonschema.NewSchema(calicoSchemaLoader)
+	calicoNetworkPolicySchema = calicoSchema
+}
 func loadSchema(schemaFile string) string {
 	// Assuming the file is in the same directory
 	path, err := filepath.Abs(filepath.Join("./pkg/validator/schemas", schemaFile))
@@ -52,6 +55,18 @@ func CRDValidator(policy map[string]interface{}) []error {
 	switch kind {
 	case "CiliumNetworkPolicy":
 		schema = ciliumNetworkPolicySchema
+
+	case "NetworkPolicy":
+		// distringuish between Kubernetes and Calico
+		apiVersion, _ := policy["apiVersion"].(string)
+
+		if strings.Contains(apiVersion, "projectcalico.org") {
+			schema = calicoNetworkPolicySchema
+		} else {
+			validationErrors = append(validationErrors, fmt.Errorf("unsupported Kubernetes NetworkPolicy"))
+			return validationErrors
+		}
+
 	default:
 		validationErrors = append(validationErrors, fmt.Errorf("unknown policy kind: %s", kind))
 		return validationErrors

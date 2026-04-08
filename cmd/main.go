@@ -262,10 +262,8 @@ func main() {
 }
 
 func startPythonServer(model, port string) *exec.Cmd {
-	config, _ := utils.ReadConfig("conf/custom.yaml")
-	token := config.User.HuggingfaceToken
 
-	cmd := exec.Command("python3", "pkg/policygenerator/models/server.py", "--model", model, "--port", port, "--token="+token)
+	cmd := exec.Command("python3", "pkg/policygenerator/models/server.py", "--model", model, "--port", port)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd

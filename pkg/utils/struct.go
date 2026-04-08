@@ -10,8 +10,7 @@ type Models struct {
 
 type Configuration struct {
 	User struct {
-		HuggingfaceToken string `yaml:"huggingface-token"`
-		Home             string `yaml:"home"`
+		Home string `yaml:"home"`
 	} `yaml:"user"`
 }
 
