@@ -94,47 +94,36 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	var entities []utils.Entity
 	var err error
 	if r.Mode == "user" && r.Intent != nil && *r.Intent != "" {
-		if r.HTTPClient == nil {
-			logger.Error(fmt.Errorf("HTTP client is nil"), "HTTP client is not initialized")
-			return reconcile.Result{}, fmt.Errorf("HTTP client is not initialized")
-		}
-		logger.Info("Intents received. ", "Intent", *r.Intent)
-
 		logger.Info("Using raw intent (LLM-based pipeline)")
 
-		// 🔍 Detect CNI
+		// 🔹 1. Recupera servizi dal cluster
+		servicesContext, err := r.getClusterServices(ctx)
+		if err != nil {
+			logger.Error(err, "failed to get cluster services")
+			return reconcile.Result{}, err
+		}
+
+		// 🔹 2. Recupera CNI
 		cniType, err := detectCNIPlugin(ctx, r.Client)
 		if err != nil {
 			logger.Error(err, "failed to detect CNI")
-			return ctrl.Result{}, err
+			return reconcile.Result{}, err
 		}
 
-		// 🔍 Costruisci prompt base
-		var prompt string
+		// 🔹 3. Costruisci prompt finale
+		var finalPrompt string
 
 		switch cniType {
 		case "cilium":
-			prompt = fmt.Sprintf("%s. Generate a CiliumNetworkPolicy.", *r.Intent)
-
+			finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a CiliumNetworkPolicy.", *r.Intent, servicesContext)
 		case "calico":
-			// Rileva apiVersion Calico testando le API disponibili
-			apiVersion := "crd.projectcalico.org/v1"
-			testList := &unstructured.UnstructuredList{}
-			testList.SetGroupVersionKind(schema.GroupVersionKind{
-				Group:   "crd.projectcalico.org",
-				Version: "v1",
-				Kind:    "NetworkPolicyList",
-			})
-			if err := r.Client.List(ctx, testList, client.InNamespace("default")); err != nil {
-				apiVersion = "projectcalico.org/v3"
-			}
-			prompt = fmt.Sprintf("%s. Generate a CalicoNetworkPolicy with apiVersion: %s.", *r.Intent, apiVersion)
-
+			apiVersion := detectCalicoAPIVersion(ctx, r.Client)
+			finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a CalicoNetworkPolicy with apiVersion: %s.", *r.Intent, servicesContext, apiVersion)
 		default:
-			prompt = fmt.Sprintf("%s. Generate a Kubernetes NetworkPolicy.", *r.Intent)
+			finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a Kubernetes NetworkPolicy.", *r.Intent, servicesContext)
 		}
 
-		prompts.Network = append(prompts.Network, prompt)
+		prompts.Network = append(prompts.Network, finalPrompt)
 	} else if r.Mode == "user" && (r.Intent == nil || *r.Intent == "") {
 		logger.Info("Intent not found")
 		return doNotRequeue()
@@ -310,4 +299,42 @@ func detectCNIPlugin(ctx context.Context, k8sClient client.Client) (string, erro
 		}
 	}
 	return "unknown", nil
+}
+
+func detectCalicoAPIVersion(ctx context.Context, k8sClient client.Client) string {
+	// Search calico's CDR and read group and version
+	exec := func(group, version string) bool {
+		u := &unstructured.UnstructuredList{}
+		u.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   group,
+			Version: version,
+			Kind:    "NetworkPolicyList",
+		})
+		err := k8sClient.List(ctx, u, client.InNamespace("default"))
+		return err == nil
+	}
+	if exec("crd.projectcalico.org", "v1") {
+		return "crd.projectcalico.org/v1"
+	}
+	if exec("projectcalico.org", "v3") {
+		return "projectcalico.org/v3"
+	}
+	return "crd.projectcalico.org/v1"
+}
+
+func (r *KubeTeusReconciler) getClusterServices(ctx context.Context) (string, error) {
+	var svcList v1.ServiceList
+
+	err := r.List(ctx, &svcList)
+	if err != nil {
+		return "", err
+	}
+
+	services := "Available services in the cluster:\n"
+
+	for _, svc := range svcList.Items {
+		services += fmt.Sprintf("- %s\n", svc.Name)
+	}
+
+	return services, nil
 }

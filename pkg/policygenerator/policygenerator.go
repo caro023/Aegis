@@ -3,10 +3,11 @@ package policygenerator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"os/exec"
+	"io"
+	"net/http"
 	"regexp"
-	"sync"
 
 	"github.com/cclab-inu/KubeTeus/pkg/utils"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -31,33 +32,44 @@ func PolicyGenerator(ctx context.Context, k8sClient client.Client, model string,
 func generatePolicy(ctx context.Context, prompts []string, url string, model string) ([]string, error) {
 	logger := log.FromContext(ctx)
 	var results []string
-	var mu sync.Mutex
+
 	for _, prompt := range prompts {
-		cmd := exec.Command("curl", "-X", "POST", url, "-H", "Content-Type: application/json", "-d", fmt.Sprintf(`{"model": "%s", "prompt": "%s"}`, model, prompt))
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		err := cmd.Run()
+		// Serializza correttamente il JSON con encoding/json per gestire newline e caratteri speciali
+		body, err := json.Marshal(map[string]string{
+			"model":  model,
+			"prompt": prompt,
+		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to execute command: %v", err)
+			return nil, fmt.Errorf("failed to marshal request: %v", err)
 		}
-		if cmd.ProcessState.ExitCode() == 0 {
-			logger.Info("Policy generation succeeded", "Output", out.String())
-			output := out.String()
-			// Match full YAML block starting from apiVersion
-			re := regexp.MustCompile(`(?s)apiVersion:.*`)
-			match := re.FindStringSubmatch(output)
-			if len(match) > 0 {
-				mu.Lock()
-				results = append(results, match[0])
-				mu.Unlock()
-			} else {
-				return nil, fmt.Errorf("desired output not found in script response")
-			}
+
+		resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
+		if err != nil {
+			return nil, fmt.Errorf("failed to call generate endpoint: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("non-200 response: %d - %s", resp.StatusCode, string(bodyBytes))
+		}
+
+		outputBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response: %v", err)
+		}
+		output := string(outputBytes)
+		logger.Info("Policy generation succeeded", "Output", output)
+
+		re := regexp.MustCompile(`(?s)apiVersion:.*`)
+		match := re.FindStringSubmatch(output)
+		if len(match) > 0 {
+			results = append(results, match[0])
 		} else {
-			logger.Error(fmt.Errorf("non-200 response"), "Policy generation failed with non-200 response.")
-			continue
+			return nil, fmt.Errorf("desired output not found in script response")
 		}
 	}
+
 	logger.Info("Policy generated", "Result", results)
 	return results, nil
 }
