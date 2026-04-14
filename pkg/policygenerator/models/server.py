@@ -3,16 +3,48 @@ import re
 import argparse
 from flask import Flask, request, jsonify, Response
 from groq import Groq
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, Annotated
+import operator
 
 app = Flask(__name__)
 VALIDATOR_MODEL = "llama-3.1-8b-instant"
 
 SYSTEM_PROMPT = """You are a Kubernetes security engineer.
 Your task is to generate valid, production-ready YAML for CiliumNetworkPolicy, CalicoNetworkPolicy, Antrea, Weave or standard NetworkPolicy.
-STRICT SYNTAX RULES FOR CALICO:
-1. Use 'kind: NetworkPolicy' for namespaced policies.
-2. Use 'selector' as a string expression, e.g. 'app == "frontend"' or 'all()' for all pods.
-3. Always include 'namespace' in metadata.
+
+1. Use 'kind: NetworkPolicy' and 'apiVersion: crd.projectcalico.org/v1'.
+2. 'spec.selector' is a string expression: e.g. 'app == "frontend"'.
+3. Each ingress/egress rule MUST have 'action' inside the rule itself, NOT in spec.
+4. Use 'source.selector' (NOT 'from') to match source pods.
+5. Use 'destination.ports' as a list of integers (NOT strings, NOT ranges)(NOT 'ports' at rule level).
+6. 'action' field is REQUIRED in every ingress/egress rule.
+7. Always include 'namespace' in metadata.
+8. Don't use "from" and "to" but just "source" and "destination"
+
+CORRECT example:
+  ingress:
+  - action: Allow
+    source:             # ← not "from"
+      selector: app == "cartservice"
+    destination:          # ← ports inside destination
+      ports:
+      - 80          # ← integer, not "0-65535"
+
+CORRECT Calico example:
+apiVersion: crd.projectcalico.org/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cart-to-checkout
+  namespace: default
+spec:
+  selector: app == "checkoutservice"
+  types:
+  - Ingress
+  ingress:
+  - action: Allow
+    source:
+      selector: app == "cartservice"
 
 STRICT SYNTAX RULES FOR CILIUM:
 1. 'metadata': ALWAYS include 'name' (kebab-case, e.g., 'deny-frontend-egress') and 'namespace: default'.
@@ -87,27 +119,6 @@ def translate_intent(intent, client):
     print(f"Translated prompt: {translated}", flush=True)
     return translated
 
-def validate_yaml(technical_prompt, yaml_text, client):
-    """Use LLM3 to validate and fix the generated YAML."""
-    completion = client.chat.completions.create(
-        model=VALIDATOR_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": VALIDATION_PROMPT
-            },
-            {
-                "role": "user",
-                "content": f"INTENT:\n{technical_prompt}\n\nYAML:\n{yaml_text}"
-            }
-        ],
-        temperature=0.0,
-        max_tokens=1024,
-    )
-
-    validated_yaml = completion.choices[0].message.content.strip()
-    print(f"Validated YAML: {validated_yaml}", flush=True)
-    return validated_yaml
 
 def extract_yaml(text):
     """Extract YAML content from markdown code block."""
@@ -115,6 +126,7 @@ def extract_yaml(text):
     if match:
         return match.group(1).strip()
     return text.strip()
+
 
 
 def generate_text(prompt):
@@ -126,35 +138,109 @@ def generate_text(prompt):
         
         client = Groq(api_key=groq_api_key)
 
-        # Step 1: translate intent
-        technical_prompt = translate_intent(prompt, client)
+        graph = build_graph(client)
 
-        # Step 2: generate YAML
-        completion = client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": technical_prompt}
-            ],
-            temperature=0.1,
-            max_tokens=1024,
-        )
-
-        generated_yaml = completion.choices[0].message.content.strip()
-        print(f"Generated YAML: {generated_yaml}", flush=True)
-
-        # Step 3: validate + fix YAML
-        raw_output = completion.choices[0].message.content.strip()
-        validated_yaml = extract_yaml(raw_output)
-
-        print(f"Raw validator output: {raw_output}", flush=True)
-        print(f"Clean YAML: {validated_yaml}", flush=True)
-
-        return validated_yaml
+        final_state = graph.invoke({
+            "original_prompt": prompt,
+            "technical_prompt": "",
+            "yaml_output": "",
+            "validation_result": "invalid",
+            "iterations": 0,
+            "max_iterations": MAX_ITER,
+        })
+        return final_state["yaml_output"]
 
     except Exception as e:
         print(f"Error calling Groq API: {str(e)}", flush=True)
         return jsonify({"error": str(e)}), 500
+    
+
+
+# --- Stato condiviso tra i nodi ---
+class PolicyState(TypedDict):
+    original_prompt: str
+    technical_prompt: str
+    yaml_output: str
+    validation_result: str   # "valid" | "invalid"
+    iterations: int
+    max_iterations: int
+
+MAX_ITER = 5
+
+# --- Nodi ---
+def node_translate(state: PolicyState, client) -> PolicyState:
+    translated = translate_intent(state["original_prompt"], client)
+    return {**state, "technical_prompt": translated}
+
+def node_validate(state: PolicyState, client) -> PolicyState:
+    completion = client.chat.completions.create(
+        model=VALIDATOR_MODEL,
+        messages=[
+            {"role": "system", "content": VALIDATION_PROMPT}, 
+            {"role": "user", "content": f"INTENT:\n{state['technical_prompt']}\n\nYAML:\n{state['yaml_output']}"}
+        ],
+        temperature=0.0,
+        max_tokens=1024,
+    )
+    raw = completion.choices[0].message.content.strip()
+
+    if raw.upper().startswith("VALID"):
+        return {**state, "validation_result": "valid"}
+    else:
+        return {**state, "yaml_output": extract_yaml(raw), "validation_result": "invalid"}
+
+def node_generate(state: PolicyState, client) -> PolicyState:
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    
+    if state["iterations"] > 0 and state["yaml_output"]:
+        messages.append({
+            "role": "user",
+            "content": (
+                f"{state['technical_prompt']}\n\n"
+                f"Previous attempt was invalid. Here is the partially corrected YAML — "
+                f"fix any remaining issues:\n{state['yaml_output']}"
+            )
+        })
+    else:
+        messages.append({"role": "user", "content": state["technical_prompt"]})
+
+    completion = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=messages,
+        temperature=0.1,
+        max_tokens=1024,
+    )
+    yaml_out = extract_yaml(completion.choices[0].message.content.strip())
+    return {**state, "yaml_output": yaml_out, "iterations": state["iterations"] + 1}
+
+# --- Routing ---
+def should_continue(state: PolicyState) -> str:
+    if state["validation_result"] == "valid":
+        return "end"
+    if state["iterations"] >= state["max_iterations"]:
+        print("Max iterations reached, returning best effort YAML")
+        return "end"
+    return "generate"  # torna a rigenerare col YAML fixato come contesto
+
+# --- Costruzione del grafo ---
+def build_graph(client):
+    graph = StateGraph(PolicyState)
+
+    graph.add_node("translate",  lambda s: node_translate(s, client))
+    graph.add_node("generate",   lambda s: node_generate(s, client))
+    graph.add_node("validate",   lambda s: node_validate(s, client))
+
+    graph.set_entry_point("translate")
+    graph.add_edge("translate", "generate")
+    graph.add_edge("generate", "validate")
+
+    graph.add_conditional_edges(
+        "validate",
+        should_continue,
+        {"generate": "generate", "end": END}
+    )
+
+    return graph.compile()
 
 @app.route('/generate', methods=['POST'])
 def generate():

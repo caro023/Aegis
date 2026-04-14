@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/cclab-inu/KubeTeus/pkg/utils"
@@ -202,6 +203,14 @@ func extractLabel(labels map[string]string) (string, string) {
 		return key, value
 	}
 	return "", ""
+}
+
+func executeCommand(ctx context.Context, cmd string) (string, error) {
+	output, err := exec.CommandContext(ctx, "sh", "-c", cmd).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("failed to execute command: %v, output: %s", err, string(output))
+	}
+	return string(output), nil
 }
 
 func findPodByIP(ctx context.Context, ip string, namespace string) string {

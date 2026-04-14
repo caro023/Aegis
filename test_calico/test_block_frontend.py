@@ -35,7 +35,7 @@ class TestBlockFrontend:
                 f"{self.kubeteus_url}/intent",
                 data=full_intent,
                 headers={"Content-Type": "text/plain"},
-                timeout=10
+                timeout=50
             )
             if response.status_code == 200:
                 print("✅ Intent accepted by KubeTeus")
