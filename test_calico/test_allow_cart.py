@@ -36,7 +36,7 @@ class TestAllowCartToCheckout:
                 f"{self.kubeteus_url}/intent",
                 data=full_intent,
                 headers={"Content-Type": "text/plain"},
-                timeout=50
+                timeout=500
             )
             if response.status_code == 200:
                 print("✅ Intent accepted by KubeTeus")

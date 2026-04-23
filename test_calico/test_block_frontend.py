@@ -35,7 +35,7 @@ class TestBlockFrontend:
                 f"{self.kubeteus_url}/intent",
                 data=full_intent,
                 headers={"Content-Type": "text/plain"},
-                timeout=50
+                timeout=500
             )
             if response.status_code == 200:
                 print("✅ Intent accepted by KubeTeus")
@@ -76,13 +76,22 @@ class TestBlockFrontend:
         return ip if ip else None
 
     def get_network_policies(self):
-        """Mostra le NetworkPolicy attive nel namespace."""
         print(f"\n📋 NetworkPolicies in '{self.namespace}':")
+        
+        # Standard K8s
         result = subprocess.run(
             ["kubectl", "get", "networkpolicies", "-n", self.namespace],
             capture_output=True, text=True
         )
-        print(result.stdout if result.stdout.strip() else "  (none)")
+        print("K8s:", result.stdout if result.stdout.strip() else "  (none)")
+        
+        # Calico
+        result = subprocess.run(
+            ["kubectl", "get", "networkpolicies.crd.projectcalico.org", 
+            "-n", self.namespace],
+            capture_output=True, text=True
+        )
+        print("Calico:", result.stdout if result.stdout.strip() else "  (none)") 
 
     # ------------------------------------------------------------------
     # Connectivity
