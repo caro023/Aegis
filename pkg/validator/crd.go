@@ -57,7 +57,7 @@ func CRDValidator(policy map[string]interface{}) []error {
 		schema = ciliumNetworkPolicySchema
 
 	case "NetworkPolicy":
-		// distringuish between Kubernetes and Calico
+		// distinguish between Kubernetes and Calico
 		apiVersion, _ := policy["apiVersion"].(string)
 
 		if strings.Contains(apiVersion, "projectcalico.org") {

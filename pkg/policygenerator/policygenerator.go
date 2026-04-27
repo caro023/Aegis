@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 
 	"github.com/cclab-inu/KubeTeus/pkg/utils"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -19,9 +18,10 @@ func PolicyGenerator(ctx context.Context, k8sClient client.Client, model string,
 	logger := log.FromContext(ctx)
 	models := utils.SelectModel(model)
 	if len(prompts.Network) > 0 {
-		networkPolicies, err := generatePolicy(ctx, prompts.Network, "http://localhost:5000/generate", models.Network)
+		networkPolicies, testScript, err := generatePolicy(ctx, prompts.Network, "http://localhost:5000/generate", models.Network)
 		if err == nil {
 			policy.Network = networkPolicies
+			policy.TestScript = testScript
 		} else {
 			logger.Error(err, "Network policy generation failed")
 		}
@@ -29,47 +29,48 @@ func PolicyGenerator(ctx context.Context, k8sClient client.Client, model string,
 	return policy, nil
 }
 
-func generatePolicy(ctx context.Context, prompts []string, url string, model string) ([]string, error) {
+func generatePolicy(ctx context.Context, prompts []string, url string, model string) ([]string, string, error) {
 	logger := log.FromContext(ctx)
 	var results []string
+	var testScript string
 
 	for _, prompt := range prompts {
-		// Serializza correttamente il JSON con encoding/json per gestire newline e caratteri speciali
 		body, err := json.Marshal(map[string]string{
 			"model":  model,
 			"prompt": prompt,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request: %v", err)
+			return nil, "", fmt.Errorf("failed to marshal request: %v", err) // ← tre valori
 		}
 
 		resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
 		if err != nil {
-			return nil, fmt.Errorf("failed to call generate endpoint: %v", err)
+			return nil, "", fmt.Errorf("failed to call generate endpoint: %v", err)
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(resp.Body)
-			return nil, fmt.Errorf("non-200 response: %d - %s", resp.StatusCode, string(bodyBytes))
+			return nil, "", fmt.Errorf("non-200 response: %d - %s", resp.StatusCode, string(bodyBytes))
 		}
 
-		outputBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read response: %v", err)
+		var result struct {
+			Yaml string `json:"yaml"`
+			Test string `json:"test"`
 		}
-		output := string(outputBytes)
-		logger.Info("Policy generation succeeded", "Output", output)
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, "", fmt.Errorf("failed to decode response JSON: %v", err)
+		}
+		logger.Info("Policy generation succeeded", "Output", result)
 
-		re := regexp.MustCompile(`(?s)apiVersion:.*`)
-		match := re.FindStringSubmatch(output)
-		if len(match) > 0 {
-			results = append(results, match[0])
-		} else {
-			return nil, fmt.Errorf("desired output not found in script response")
+		if result.Yaml == "" {
+			return nil, "", fmt.Errorf("empty yaml field in response")
 		}
+
+		results = append(results, result.Yaml)
+		testScript = result.Test
+		logger.Info("Policy generated", "Result", results)
 	}
 
-	logger.Info("Policy generated", "Result", results)
-	return results, nil
+	return results, testScript, nil
 }

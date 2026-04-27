@@ -1,7 +1,8 @@
 package utils
 
 type Policy struct {
-	Network []string
+	Network    []string
+	TestScript string
 }
 
 type Models struct {

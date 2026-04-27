@@ -4,8 +4,9 @@ import argparse
 from flask import Flask, request, jsonify, Response
 from groq import Groq
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, Annotated
-import operator
+from typing import TypedDict
+from typing import Annotated
+
 
 app = Flask(__name__)
 VALIDATOR_MODEL = "qwen/qwen3-32b"
@@ -58,45 +59,64 @@ CORRECT example:
 STRICT SYNTAX RULES FOR CILIUM:
 
 1. metadata:
-   - MUST include:
-     name (kebab-case, e.g., deny-frontend-egress)
-     namespace: default
+   - MUST include: name (kebab-case), namespace: default
 
 2. endpointSelector:
    - MUST use matchLabels
-   - If selecting all pods → use:
-     matchLabels: {}
+   - To select all pods: matchLabels: {}
 
-3. egress / ingress rules:
-   - DO NOT use "action"
-   - CiliumNetworkPolicy DOES NOT support "Allow" or "Deny" fields
-   - Traffic is allowed ONLY if explicitly specified
+3. ALLOW vs DENY — use the correct field:
+   - To ALLOW traffic  → use 'egress' / 'ingress'
+   - To DENY traffic   → use 'egressDeny' / 'ingressDeny'
+   - NEVER mix allow and deny in the same rule block
+   - NEVER use "action", "Allow", or "Deny" as fields inside rules
 
-4. DENY LOGIC:
-   - Cilium does NOT support explicit deny rules
-   - To block traffic, you MUST:
-     - allow all EXCEPT the target using matchExpressions
-   - Example:
-     matchExpressions:
-     - key: app
-       operator: NotIn
-       values: ["checkoutservice"]
+4. DENY LOGIC (CRITICAL):
+   - Use 'egressDeny' to explicitly block egress to a destination
+   - Use 'ingressDeny' to explicitly block ingress from a source
+   - Example for "block frontend → checkoutservice":
+     spec:
+       endpointSelector:
+         matchLabels:
+           app: frontend
+       egressDeny:
+       - toEndpoints:
+         - matchLabels:
+             app: checkoutservice
+
+   - Do NOT use matchExpressions with NotIn for deny intents.
+     NotIn only restricts allow rules, it does NOT deny traffic.
 
 5. Ports:
-   - If ports are specified:
-     ports MUST be strings
-     Example:
-     toPorts:
-     - ports:
-       - port: "80"
-         protocol: TCP
+   - MUST be strings: port: "80" not port: 80
+   - Protocol: TCP, UDP, SCTP, or ANY. NEVER use ALL.
 
 6. Default behavior:
-   - If no egress rules → deny all egress
-   - If no ingress rules → deny all ingress
+   - If no egress rules → all egress denied
+   - If no ingress rules → all ingress denied
+   - An egressDeny rule blocks specific traffic while leaving other traffic unaffected
 
 --------------------------------------------------
-CORRECT EXAMPLE:
+CORRECT EXAMPLE — DENY intent:
+
+Intent: "Block frontend → checkoutservice"
+
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-frontend-to-checkoutservice
+  namespace: default
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egressDeny:
+  - toEndpoints:
+    - matchLabels:
+        app: checkoutservice
+
+--------------------------------------------------
+CORRECT EXAMPLE — ALLOW intent:
 
 Intent: "Allow frontend to talk only to frontend-external"
 
@@ -113,35 +133,6 @@ spec:
   - toEndpoints:
     - matchLabels:
         app: frontend-external
-  ingress: []
-
---------------------------------------------------
-ANOTHER EXAMPLE (implicit deny):
-
-Intent: "Block frontend → checkoutservice"
-
-Correct approach:
-- DO NOT write a deny rule
-- Allow only other destinations (or restrict allowed ones)
-
-Example:
-
-apiVersion: cilium.io/v2
-kind: CiliumNetworkPolicy
-metadata:
-  name: restrict-frontend-egress
-  namespace: default
-spec:
-  endpointSelector:
-    matchLabels:
-      app: frontend
-  egress:
-  - toEndpoints:
-    - matchExpressions:
-      - key: app
-        operator: NotIn
-        values:
-        - checkoutservice
   ingress: []
 
 GENERAL RULES:
@@ -177,6 +168,11 @@ OUTPUT FORMAT:
 
 If the intent is too generic or does not mention specific pods, infer reasonable defaults based on common Kubernetes security practices.
 IMPORTANT: If the input specifies a policy type (e.g. "Generate a CalicoNetworkPolicy" or "Generate a CiliumNetworkPolicy"), you MUST preserve that exact instruction at the end of your output.
+DENY/ALLOW DISAMBIGUATION (MANDATORY):
+- If the intent uses words like "block", "deny", "restrict", "drop" → the action is DENY.
+- If the intent uses words like "allow", "permit", "enable" → the action is ALLOW.
+- Always state the action explicitly as "allow" or "deny" in your output.
+- Never use ambiguous terms like "control" or "manage".
 Output ONLY the translated prompt, no explanations."""
 
 VALIDATION_PROMPT = """You are a Kubernetes network policy validator and fixer.
@@ -224,16 +220,71 @@ INTENT MATCHING:
 - Action (Allow/Deny) must match intent
 
 CILIUM SYNTAX (CRITICAL - always enforce):
-- NEVER add "action" field inside egress or ingress rules.
-- NEVER use "action: Allow" or "action: Deny" anywhere in the spec.
-- To DENY traffic in Cilium: use matchExpressions with operator: NotIn.
-- To ALLOW traffic: simply list the endpoints in toEndpoints/fromEndpoints.
+- NEVER add "action" field inside egress, ingress, egressDeny, or ingressDeny rules.
+- NEVER use matchExpressions with operator: NotIn to implement a deny intent.
+  NotIn is only valid for allow rules that restrict allowed destinations.
+- For DENY intents: use 'egressDeny' or 'ingressDeny' with toEndpoints/fromEndpoints.
+- For ALLOW intents: use 'egress' or 'ingress' with toEndpoints/fromEndpoints.
 - NEVER use "policyType", "rules", or "spec.action" fields.
 - Ports MUST be strings: port: "80" not port: 80.
 - Protocol MUST be one of: TCP, UDP, SCTP, ANY. NEVER use ALL.
+- If the intent is allow all traffic: egress: [{}]
+- If the YAML uses 'egress' with NotIn for a deny intent → replace with 'egressDeny' + matchLabels.
+
+DENY DETECTION RULE:
+- If the translated intent contains words like "block", "deny", "restrict", "drop" →
+  the policy MUST use egressDeny or ingressDeny, never egress with NotIn.
 
 If everything is correct → return: VALID
 Otherwise → return the full corrected YAML."""
+
+TEST_GENERATOR_PROMPT = """You are a Kubernetes network policy testing expert.
+
+You will receive a network intent and a CiliumNetworkPolicy.
+Your task is to output ONLY an executable bash script that verifies the policy is correctly enforced using kubectl.
+
+STRICT OUTPUT RULES:
+- Output ONLY the bash script, nothing else
+- Do NOT write any explanation, reasoning, comments outside the script, or markdown
+- Start the script immediately with #!/bin/bash
+- Do NOT use -i or -t flags in kubectl exec (non-interactive mode only)
+- Do NOT use nc or netcat
+- Do NOT use /dev/tcp
+
+CONNECTIVITY TEST METHOD (MANDATORY):
+- All pods run nginx and expose port 80
+- ALWAYS test TCP connectivity using:
+  kubectl exec <POD> -- curl --max-time 3 -s -o /dev/null -w "%{http_code}" http://<service>:80
+- A blocked connection: curl returns exit code non-zero OR http_code is 000 → SUCCESS
+- An allowed connection: curl returns exit code 0 AND http_code is not 000 → SUCCESS
+- Check BOTH exit code and http_code for reliability
+
+SCRIPT STRUCTURE (follow exactly):
+#!/bin/bash
+set -uo pipefail
+
+# Retrieve pod names
+SOURCE_POD=$(kubectl get pods -l app=<source> -o jsonpath='{.items[0].metadata.name}')
+
+# === ALLOWED CONNECTIONS ===
+echo "=== ALLOWED CONNECTIONS ==="
+HTTP_CODE=$(kubectl exec $SOURCE_POD -- curl --max-time 3 -s -o /dev/null -w "%{http_code}" http://<allowed-service>:80 2>/dev/null)
+if [ $? -eq 0 ] && [ "$HTTP_CODE" != "000" ]; then
+  echo "SUCCESS: <source> -> <allowed-service> is allowed (HTTP $HTTP_CODE)"
+else
+  echo "FAIL: <source> -> <allowed-service> should be allowed but is blocked"
+fi
+
+# === BLOCKED CONNECTIONS ===
+echo "=== BLOCKED CONNECTIONS ==="
+HTTP_CODE=$(kubectl exec $SOURCE_POD -- curl --max-time 3 -s -o /dev/null -w "%{http_code}" http://<blocked-service>:80 2>/dev/null)
+if [ $? -ne 0 ] || [ "$HTTP_CODE" = "000" ]; then
+  echo "SUCCESS: <source> -> <blocked-service> is blocked"
+else
+  echo "FAIL: <source> -> <blocked-service> should be blocked but is allowed (HTTP $HTTP_CODE)"
+fi
+"""
+
 GROQ_MODEL = None
 
 def get_args():
@@ -243,7 +294,7 @@ def get_args():
     return parser.parse_args()
 
 def translate_intent(intent, client):
-    """Use LLM1 to generaate a more detailed prompt."""
+    """Use LLM1 to generate a more detailed prompt."""
     completion = client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[
@@ -267,6 +318,23 @@ def extract_yaml(text):
         return match.group(1).strip()
     return text.strip()
 
+def extract_script(text: str) -> str:
+    # Rimuovi <think>...</think> se chiuso
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    
+    # Se il <think> non è chiuso, taglia tutto quello che precede #!/bin/bash
+    if text.startswith('<think>') or '<think>' in text[:50]:
+        match = re.search(r'(#!/bin/bash.*)', text, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+        return ""  # nessuno script trovato
+    
+    # Rimuovi markdown fences
+    match = re.search(r"```(?:bash|sh)?\n(.*?)```", text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    
+    return text.strip()
 
 
 def generate_text(prompt):
@@ -285,29 +353,35 @@ def generate_text(prompt):
             "technical_prompt": "",
             "yaml_output": "",
             "validation_result": "invalid",
+            "test_script": "",
             "iterations": 0,
             "max_iterations": MAX_ITER,
         })
-        return final_state["yaml_output"]
+        return {
+            "yaml": final_state["yaml_output"],
+            "test": final_state.get("test_script", "")
+        }
 
     except Exception as e:
         print(f"Error calling Groq API: {str(e)}", flush=True)
         return jsonify({"error": str(e)}), 500
     
+def keep_last(a, b):
+    return b
 
-
-# --- Stato condiviso tra i nodi ---
+# --- shared state between nodes ---
 class PolicyState(TypedDict):
-    original_prompt: str
-    technical_prompt: str
-    yaml_output: str
-    validation_result: str   # "valid" | "invalid"
-    iterations: int
-    max_iterations: int
+    original_prompt: Annotated[str, keep_last]
+    technical_prompt: Annotated[str, keep_last]
+    yaml_output: Annotated[str, keep_last]
+    validation_result: Annotated[str, keep_last]   # "valid" | "invalid"
+    test_script: Annotated[str, keep_last]
+    iterations: Annotated[int, keep_last]
+    max_iterations: Annotated[int, keep_last]
 
 MAX_ITER = 3
 
-# --- Nodi ---
+# --- Node ---
 def node_translate(state: PolicyState, client) -> PolicyState:
     translated = translate_intent(state["original_prompt"], client)
     return {**state, "technical_prompt": translated}
@@ -345,13 +419,32 @@ def node_generate(state: PolicyState, client) -> PolicyState:
         messages.append({"role": "user", "content": state["technical_prompt"]})
 
     completion = client.chat.completions.create(
-        model=GENERATOR_MODEL,  # ← era GROQ_MODEL, ora usa Qwen
+        model=GENERATOR_MODEL,  
         messages=messages,
         temperature=0.1,
-        max_tokens=4096,        # ← aumenta perché Qwen emette <think> lungo
+        max_tokens=4096,    
     )
     raw = extract_yaml(completion.choices[0].message.content.strip())  # ← rimuove <think>
     return {**state, "yaml_output": raw, "iterations": state["iterations"] + 1}
+
+def node_testing(state: PolicyState, client) -> PolicyState:
+    completion = client.chat.completions.create(
+        model=VALIDATOR_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": TEST_GENERATOR_PROMPT
+            },
+            {
+                "role": "user",
+                "content": f"INTENT:\n{state['technical_prompt']}"  # ← solo l'intent, non lo YAML
+            }
+        ],
+        temperature=0.1,
+        max_tokens=4096,
+    )
+    script = extract_script(completion.choices[0].message.content.strip())
+    return {**state, "test_script": script}
 
 # --- Routing ---
 def should_continue(state: PolicyState) -> str:
@@ -361,17 +454,19 @@ def should_continue(state: PolicyState) -> str:
         print("Max iterations reached, returning best effort YAML")
         return "end"
     return "generate"  # torna a rigenerare col YAML fixato come contesto
-
-# --- Costruzione del grafo ---
+    
+# --- Graph building ---
 def build_graph(client):
     graph = StateGraph(PolicyState)
 
     graph.add_node("translate",  lambda s: node_translate(s, client))
     graph.add_node("generate",   lambda s: node_generate(s, client))
     graph.add_node("validate",   lambda s: node_validate(s, client))
+    graph.add_node("testing",   lambda s: node_testing(s, client))
 
     graph.set_entry_point("translate")
     graph.add_edge("translate", "generate")
+    graph.add_edge("translate", "testing")
     graph.add_edge("generate", "validate")
 
     graph.add_conditional_edges(
@@ -380,6 +475,8 @@ def build_graph(client):
         {"generate": "generate", "end": END}
     )
 
+    graph.add_edge("testing", END)
+
     return graph.compile()
 
 @app.route('/generate', methods=['POST'])
@@ -387,9 +484,13 @@ def generate():
     data = request.get_json()
     if not data or 'prompt' not in data:
         return jsonify({"error": "Invalid request, missing 'prompt' field"}), 400
-    prompt = data['prompt']
-    generated_text = generate_text(prompt)
-    return Response(generated_text, status=200, mimetype='text/plain')
+    try:
+        result = generate_text(data['prompt'])
+        return jsonify(result), 200
+    except Exception as e:
+        print(f"Error: {str(e)}", flush=True)
+        return jsonify({"error": str(e)}), 500
+    #return Response(generated_text, status=200, mimetype='text/plain')
 
 @app.route('/health', methods=['GET'])
 def health():

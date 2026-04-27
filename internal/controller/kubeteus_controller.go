@@ -29,6 +29,7 @@ import (
 	"github.com/cclab-inu/KubeTeus/pkg/enforcer"
 	"github.com/cclab-inu/KubeTeus/pkg/policygenerator"
 	//"github.com/cclab-inu/KubeTeus/pkg/promptprocessor"
+	"github.com/cclab-inu/KubeTeus/pkg/tester"
 	"github.com/cclab-inu/KubeTeus/pkg/utils"
 	"github.com/cclab-inu/KubeTeus/pkg/validator"
 	"github.com/cclab-inu/KubeTeus/pkg/watcher"
@@ -202,6 +203,12 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err == nil {
 			break
 		}
+		if policies.Network == nil || len(policies.Network) == 0 {
+			logger.Error(fmt.Errorf("empty policies"), "LLM returned no policies", "attempt", i+1)
+			time.Sleep(retryInterval)
+			continue
+		}
+
 		logger.Error(err, "failed to execute policy creation, retrying...", "attempt", i+1, "maxRetries", maxRetries)
 		time.Sleep(retryInterval)
 	}
@@ -209,6 +216,10 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		logger.Error(err, "failed to execute policy creation after retries")
 		return ctrl.Result{}, err
 	}
+	if policies.Network == nil || len(policies.Network) == 0 {
+		return ctrl.Result{}, fmt.Errorf("no valid policies generated after retries")
+	}
+
 	logger.Info("Policies generated", "Network Policies", policies.Network)
 
 	validationErrors, err := validator.Validator(ctx, r.Client, logger, podInfo, entities, policies.Network)
@@ -226,6 +237,24 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return doNotRequeue()
 	}
 	logger.Info("Policies enforeced")
+
+	if policies.TestScript != "" {
+		output, err := tester.RunTestScript(ctx, policies.TestScript)
+		if err != nil {
+			logger.Error(err, "Post-enforcement tests FAILED — rolling back policies",
+				"test_output", output)
+
+			if rollbackErr := enforcer.Rollback(ctx, r.Client, policies.Network); rollbackErr != nil {
+				logger.Error(rollbackErr, "Rollback also failed — cluster may be in inconsistent state")
+			} else {
+				logger.Info("Rollback completed successfully")
+			}
+			return doNotRequeue()
+		}
+		logger.Info("Post-enforcement testing completed", "test_output", output)
+	} else {
+		logger.Info("No test script available, skipping connectivity tests")
+	}
 
 	return doNotRequeue()
 }

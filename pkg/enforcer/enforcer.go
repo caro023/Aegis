@@ -7,6 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/yaml"
 )
 
@@ -55,12 +56,49 @@ func convertToUnstructured(obj interface{}) (*unstructured.Unstructured, error) 
 func applyPolicy(ctx context.Context, k8sClient client.Client, policy *unstructured.Unstructured) error {
 	if err := k8sClient.Create(ctx, policy); err != nil {
 		if errors.IsAlreadyExists(err) {
+			//get the existing policy
+			existing := &unstructured.Unstructured{}
+			existing.SetGroupVersionKind(policy.GroupVersionKind())
+
+			key := client.ObjectKey{
+				Name:      policy.GetName(),
+				Namespace: policy.GetNamespace(),
+			}
+
+			if err := k8sClient.Get(ctx, key, existing); err != nil {
+				return fmt.Errorf("failed to get existing policy: %v", err)
+			}
+
+			// copy the resourceVersion
+			policy.SetResourceVersion(existing.GetResourceVersion())
+
+			// Update
 			if err := k8sClient.Update(ctx, policy); err != nil {
 				return fmt.Errorf("failed to update existing policy: %v", err)
 			}
 		} else {
 			return fmt.Errorf("failed to create policy: %v", err)
 		}
+	}
+	return nil
+}
+
+func Rollback(ctx context.Context, k8sClient client.Client, policies []string) error {
+	logger := log.FromContext(ctx)
+
+	for _, raw := range policies {
+		obj := &unstructured.Unstructured{}
+		if err := yaml.Unmarshal([]byte(raw), &obj.Object); err != nil {
+			logger.Error(err, "failed to unmarshal policy for rollback")
+			continue
+		}
+
+		if err := k8sClient.Delete(ctx, obj); err != nil {
+			if !errors.IsNotFound(err) {
+				return fmt.Errorf("rollback failed for %s: %w", obj.GetName(), err)
+			}
+		}
+		logger.Info("Rolled back policy", "name", obj.GetName())
 	}
 	return nil
 }
