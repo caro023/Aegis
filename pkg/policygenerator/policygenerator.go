@@ -23,7 +23,7 @@ func PolicyGenerator(ctx context.Context, k8sClient client.Client, model string,
 			policy.Network = networkPolicies
 			policy.TestScript = testScript
 		} else {
-			logger.Error(err, "Network policy generation failed")
+			logger.Info("Network policy generation failed")
 		}
 	}
 	return policy, nil

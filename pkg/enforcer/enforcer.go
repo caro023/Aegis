@@ -3,6 +3,7 @@ package enforcer
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -12,7 +13,6 @@ import (
 )
 
 func Enforcer(ctx context.Context, k8sClient client.Client, policies interface{}) error {
-	// Supporta sia []string che []interface{}
 	var policySlice []interface{}
 	switch v := policies.(type) {
 	case []string:
@@ -26,31 +26,49 @@ func Enforcer(ctx context.Context, k8sClient client.Client, policies interface{}
 	}
 
 	for _, policyInterface := range policySlice {
-		unstructuredPolicy, err := convertToUnstructured(policyInterface)
+		// ← ora gestisce multi-documento
+		unstructuredPolicies, err := convertToUnstructuredMulti(policyInterface)
 		if err != nil {
 			return fmt.Errorf("failed to convert policy to unstructured: %v", err)
 		}
-		if err := applyPolicy(ctx, k8sClient, unstructuredPolicy); err != nil {
-			return err
+		for _, up := range unstructuredPolicies {
+			if err := applyPolicy(ctx, k8sClient, up); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func convertToUnstructured(obj interface{}) (*unstructured.Unstructured, error) {
-	// If it's a YAML string parse it directly
-	if yamlStr, ok := obj.(string); ok {
-		var objMap map[string]interface{}
-		if err := yaml.Unmarshal([]byte(yamlStr), &objMap); err != nil {
-			return nil, fmt.Errorf("failed to parse YAML: %v", err)
+// convertToUnstructuredMulti gestisce sia singolo YAML che multi-documento (---)
+func convertToUnstructuredMulti(obj interface{}) ([]*unstructured.Unstructured, error) {
+	yamlStr, ok := obj.(string)
+	if !ok {
+		// fallback: map singola
+		if m, ok := obj.(map[string]interface{}); ok {
+			return []*unstructured.Unstructured{
+				{Object: m},
+			}, nil
 		}
-		return &unstructured.Unstructured{Object: objMap}, nil
+		return nil, fmt.Errorf("unsupported policy type: %T", obj)
 	}
-	// try standard conversion otherwise
-	if m, ok := obj.(map[string]interface{}); ok {
-		return &unstructured.Unstructured{Object: m}, nil
+
+	var results []*unstructured.Unstructured
+	for _, doc := range splitYAMLDocuments(yamlStr) {
+		doc = strings.TrimSpace(doc)
+		if doc == "" {
+			continue
+		}
+		var objMap map[string]interface{}
+		if err := yaml.Unmarshal([]byte(doc), &objMap); err != nil {
+			return nil, fmt.Errorf("failed to parse YAML document: %v", err)
+		}
+		if len(objMap) == 0 {
+			continue
+		}
+		results = append(results, &unstructured.Unstructured{Object: objMap})
 	}
-	return nil, fmt.Errorf("unsupported policy type: %T", obj)
+	return results, nil
 }
 
 func applyPolicy(ctx context.Context, k8sClient client.Client, policy *unstructured.Unstructured) error {
@@ -87,18 +105,47 @@ func Rollback(ctx context.Context, k8sClient client.Client, policies []string) e
 	logger := log.FromContext(ctx)
 
 	for _, raw := range policies {
-		obj := &unstructured.Unstructured{}
-		if err := yaml.Unmarshal([]byte(raw), &obj.Object); err != nil {
-			logger.Error(err, "failed to unmarshal policy for rollback")
-			continue
-		}
+		documents := splitYAMLDocuments(raw)
 
-		if err := k8sClient.Delete(ctx, obj); err != nil {
-			if !errors.IsNotFound(err) {
-				return fmt.Errorf("rollback failed for %s: %w", obj.GetName(), err)
+		for _, doc := range documents {
+			doc = strings.TrimSpace(doc)
+			if doc == "" {
+				continue
+			}
+
+			obj := &unstructured.Unstructured{}
+			if err := yaml.Unmarshal([]byte(doc), &obj.Object); err != nil {
+				logger.Error(err, "failed to unmarshal policy for rollback", "doc", doc)
+				continue
+			}
+
+			if obj.GetName() == "" {
+				logger.Info("Skipping empty object during rollback")
+				continue
+			}
+
+			if err := k8sClient.Delete(ctx, obj); err != nil {
+				if !errors.IsNotFound(err) {
+					return fmt.Errorf("rollback failed for %s: %w", obj.GetName(), err)
+				}
+				logger.Info("Policy already removed", "name", obj.GetName())
+			} else {
+				logger.Info("Rolled back policy", "name", obj.GetName())
 			}
 		}
-		logger.Info("Rolled back policy", "name", obj.GetName())
 	}
 	return nil
+}
+
+func splitYAMLDocuments(raw string) []string {
+	// Splitta su "---" che separa documenti YAML multipli
+	parts := strings.Split(raw, "\n---")
+	var docs []string
+	for _, p := range parts {
+		p = strings.TrimSpace(strings.TrimPrefix(p, "---"))
+		if p != "" {
+			docs = append(docs, p)
+		}
+	}
+	return docs
 }

@@ -21,8 +21,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -32,12 +30,9 @@ import (
 	"github.com/cclab-inu/KubeTeus/pkg/tester"
 	"github.com/cclab-inu/KubeTeus/pkg/utils"
 	"github.com/cclab-inu/KubeTeus/pkg/validator"
-	"github.com/cclab-inu/KubeTeus/pkg/watcher"
-	"gopkg.in/yaml.v3"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -97,21 +92,21 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	if r.Mode == "user" && r.Intent != nil && *r.Intent != "" {
 		logger.Info("Using raw intent (LLM-based pipeline)")
 
-		// 🔹 1. Recupera servizi dal cluster
+		// Find cluster services
 		servicesContext, err := r.getClusterServices(ctx)
 		if err != nil {
 			logger.Error(err, "failed to get cluster services")
 			return reconcile.Result{}, err
 		}
 
-		// 🔹 2. Recupera CNI
+		// Find the CNI
 		cniType, err := detectCNIPlugin(ctx, r.Client)
 		if err != nil {
 			logger.Error(err, "failed to detect CNI")
 			return reconcile.Result{}, err
 		}
 
-		// 🔹 3. Costruisci prompt finale
+		// Build the final prompt
 		var finalPrompt string
 
 		switch cniType {
@@ -128,134 +123,66 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	} else if r.Mode == "user" && (r.Intent == nil || *r.Intent == "") {
 		logger.Info("Intent not found")
 		return doNotRequeue()
-	} else if r.Mode == "config" {
-		var yamlInfo utils.YAMLInfo
-		resourceFound := false
-
-		pod := &v1.Pod{}
-		err := r.Get(ctx, req.NamespacedName, pod)
-		if err != nil {
-			if errors.IsNotFound(err) {
-				logger.Info("Resource Deleted")
-				return doNotRequeue()
-			}
-			logger.Error(err, "failed to fetch Resource")
-			return requeueWithError(err)
-		} else {
-			resourceFound = true
-		}
-
-		if !resourceFound {
-			select {
-			case <-time.After(3 * time.Second):
-				resourceFiles, err := filepath.Glob("resource/*.yaml")
-				if err != nil {
-					logger.Error(err, "failed to read resource folder")
-					return reconcile.Result{}, err
-				}
-				if len(resourceFiles) > 0 {
-					resourceFile := resourceFiles[0]
-					content, err := os.ReadFile(resourceFile)
-					if err != nil {
-						logger.Error(err, "failed to read resource file")
-						return reconcile.Result{}, err
-					}
-					if err := yaml.Unmarshal(content, &yamlInfo); err != nil {
-						logger.Error(err, "failed to unmarshal yaml file")
-						return reconcile.Result{}, err
-					}
-					req.NamespacedName.Namespace = yamlInfo.Namespace
-					req.NamespacedName.Name = yamlInfo.Name
-					resourceFound = true
-				} else {
-					logger.Info("No resource file found")
-					return doNotRequeue()
-				}
-			}
-		}
-
-		if resourceFound {
-			logger.Info("Resource Found", "Model", r.Model)
-
-			// Fetch pod configuration using the GetConfig function from the watcher package
-			netInfo, err := watcher.GetConfig(ctx, r.Client, req.NamespacedName.Namespace, req.NamespacedName.Name)
-			if err != nil {
-				logger.Error(err, "failed to get configuration")
-				return reconcile.Result{}, err
-			}
-			logger.Info("Information Extraction Completed", "NetInfo", netInfo)
-
-			/*prompts, err = promptprocessor.ConfigPromptBuilder(ctx, r.Client, netInfo)
-			if err != nil {
-				logger.Error(err, "failed to build prompts")
-				return reconcile.Result{}, err
-			}*/
-		}
 	}
 	logger.Info("Prompts created", "Network Prompts", prompts.Network)
 	if len(prompts.Network) == 0 {
 		logger.Error(fmt.Errorf("no prompts generated"), "empty prompt pipeline")
-		return ctrl.Result{}, fmt.Errorf("no prompts generated")
+		return doNotRequeue()
 	}
 
 	for i := 0; i < maxRetries; i++ {
 		policies, err = policygenerator.PolicyGenerator(ctx, r.Client, r.Model, prompts)
-		if err == nil {
+		if err == nil && len(policies.Network) > 0 {
 			break
 		}
-		if policies.Network == nil || len(policies.Network) == 0 {
-			logger.Error(fmt.Errorf("empty policies"), "LLM returned no policies", "attempt", i+1)
-			time.Sleep(retryInterval)
-			continue
-		}
-
-		logger.Error(err, "failed to execute policy creation, retrying...", "attempt", i+1, "maxRetries", maxRetries)
+		logger.Info("Policy generation attempt failed, retrying",
+			"attempt", i+1, "maxRetries", maxRetries, "error", err)
 		time.Sleep(retryInterval)
 	}
 	if err != nil {
 		logger.Error(err, "failed to execute policy creation after retries")
-		return ctrl.Result{}, err
+		return doNotRequeue()
 	}
 	if policies.Network == nil || len(policies.Network) == 0 {
-		return ctrl.Result{}, fmt.Errorf("no valid policies generated after retries")
+		logger.Error(err, "no valid policies generated after retries")
+		return doNotRequeue()
 	}
 
 	logger.Info("Policies generated", "Network Policies", policies.Network)
 
 	validationErrors, err := validator.Validator(ctx, r.Client, logger, podInfo, entities, policies.Network)
 	if err != nil {
+		logger.Error(err, "Validator error — likely API server issue")
 		return requeueWithError(err)
 	}
 	if len(validationErrors) > 0 {
-		logger.Info("Identified a misconfiguration of Policy", "ValidationErrors", validationErrors)
+		logger.Error(fmt.Errorf("policy validation failed"), "Identified a misconfiguration of Policy", "errors", validationErrors)
 		return doNotRequeue()
 	}
 	logger.Info("Policies verified", "ValidationErrors.Count", len(validationErrors), "Policy.Details", policies.Network)
 
 	if err = enforcer.Enforcer(ctx, r.Client, policies.Network); err != nil {
 		logger.Error(err, "failed to enforce policy")
-		return doNotRequeue()
+		return requeueWithError(err)
 	}
 	logger.Info("Policies enforeced")
 
 	if policies.TestScript != "" {
 		output, err := tester.RunTestScript(ctx, policies.TestScript)
 		if err != nil {
-			logger.Error(err, "Post-enforcement tests FAILED — rolling back policies",
-				"test_output", output)
+			logger.Info("Post-enforcement tests FAILED — rolling back policies")
 
 			if rollbackErr := enforcer.Rollback(ctx, r.Client, policies.Network); rollbackErr != nil {
 				logger.Error(rollbackErr, "Rollback also failed — cluster may be in inconsistent state")
 			} else {
 				logger.Info("Rollback completed successfully")
 			}
-			return doNotRequeue()
+		} else {
+			logger.Info("Post-enforcement testing completed", "test_output", output)
 		}
-		logger.Info("Post-enforcement testing completed", "test_output", output)
 	} else {
 		logger.Info("No test script available, skipping connectivity tests")
 	}
-
 	return doNotRequeue()
 }
 
