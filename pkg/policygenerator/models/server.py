@@ -22,17 +22,20 @@ The output must be a single sentence or short paragraph describing:
 - The destination pod or service (if specified)
 - The port and protocol (if specified or inferable)
 - The action (allow or deny)
-- The policy type to generate (always end with: Generate a CiliumNetworkPolicy and the version)
+- The policy type to generate (always end with: Generate a CiliumNetworkPolicy, CalicoNetworkPolicy or NetworkPolicy)
 
 LABEL RULE (MANDATORY):
 - ALWAYS use 'app == "podname"' as selector. Example: frontend → app == "frontend"
+- NEVER truncate service names: "checkout service" → app == "checkoutservice" NOT app == "checkout"
 - NEVER use other keys like 'service', 'name', 'component', 'pod'.
+- NEVER invent label keys
 
 DIRECTION RULE (MANDATORY):
 - "A allows/blocks traffic TO B" → this is an EGRESS policy on A, or INGRESS policy on B
 - EGRESS = traffic leaving the source pod
 - INGRESS = traffic arriving at the destination pod
-- When in doubt, prefer: EGRESS on source pod
+- "A talks to B" → egress from A AND ingress on B
+- If bidirectional → include both directions
 
 OUTPUT FORMAT:
 - One paragraph only
@@ -48,30 +51,8 @@ DENY/ALLOW DISAMBIGUATION (MANDATORY):
 - Never use ambiguous terms like "control" or "manage".
 Output ONLY the translated prompt, no explanations."""
 
-SYSTEM_PROMPT = """You are a Kubernetes security engineer.
-Your task is to generate valid, production-ready YAML for CiliumNetworkPolicy, CalicoNetworkPolicy, Antrea, Weave or standard NetworkPolicy.
-
-BIDIRECTIONAL CONNECTIVITY RULE (CRITICAL):
-
-- Network connectivity between two services requires BOTH:
-  - Egress policy on the source pod
-  - Ingress policy on the destination pod
-
-- Therefore:
-  - If the intent says "allow X to talk to Y", you MUST:
-    - Allow egress from X to Y
-    - AND allow ingress on Y from X
-
-  - If the intent says "allow X and Y to talk" or "vice versa":
-    - You MUST generate policies for BOTH directions:
-      - X → Y
-      - Y → X
-
-  - If the intent says "block X to Y":
-    - You MUST block traffic from X to Y using egressDeny (Cilium) or Deny rule (Calico)
-    - AND ensure ingress from X is not allowed on Y
-
-- Never assume traffic is bidirectional unless explicitly stated or logically required.
+SYSTEM_PROMPT_CALICO = """You are a Kubernetes security engineer.
+Your task is to generate valid, production-ready YAML for CalicoNetworkPolicy or standard NetworkPolicy.
 
 STRICT SYNTAX RULES FOR CALICO:
 1. Use 'kind: NetworkPolicy' and 'apiVersion: crd.projectcalico.org/v1'.
@@ -83,8 +64,31 @@ STRICT SYNTAX RULES FOR CALICO:
 7. NEVER output empty arrays: protocol: [] or ports: [] is FORBIDDEN.
 8. 'egress' must be a list [] or omitted entirely. NEVER use egress: {}.
 9. To allow/deny traffic to ALL destinations, omit 'destination' entirely. NEVER use destination: {}.
-10.For namespaced policies, ALWAYS use 'kind: NetworkPolicy'.
-11.ALWAYS use the field 'types' to specify Ingress or Egress, use the Calico semantic and not the network kubernetes one's
+10. DO NOT use Kubernetes NetworkPolicy fields such as:
+  - policyTypes
+  - to
+  - from
+  - type
+- Use:
+  - action
+  - source / destination
+  - selector
+
+  REQUIRED FIELDS:
+- metadata.namespace MUST always be present and set to: default
+- NEVER omit metadata.namespace
+
+  FORBIDDEN FIELDS (NEVER use these):
+- policyTypes    ← Kubernetes field, NOT Calico
+- types          ← also forbidden, Calico does not need it
+- from           ← use 'source' instead
+- to             ← use 'destination' instead
+
+FORBIDDEN PATTERNS:
+- NEVER add 'source: {}' to egress rules
+- NEVER add 'destination: {}' to ingress rules  
+- An egress rule has ONLY: action + destination (optional)
+- An ingress rule has ONLY: action + source (optional)
 
 If a policy defines Egress or Ingress rules, all other traffic is implicitly denied unless explicitly allowed.
 
@@ -100,8 +104,6 @@ metadata:
   namespace: default
 spec:
   selector: app == "checkoutservice"
-  types:
-  - Ingress
   ingress:
   - action: Allow
     source:
@@ -115,6 +117,10 @@ CORRECT example:
     destination:          # ← ports inside destination
       ports:
       - 80          # ← integer, not "0-65535"
+"""
+
+SYSTEM_PROMPT_CILIUM = """You are a Kubernetes security engineer.
+Your task is to generate valid, production-ready YAML for CiliumNetworkPolicy or standard NetworkPolicy.
 
 STRICT SYNTAX RULES FOR CILIUM:
 1. metadata:
@@ -199,8 +205,7 @@ GENERAL RULES:
 - No explanations or comments.
 - Start directly with 'apiVersion:'."""
 
-
-VALIDATION_PROMPT = """You are a Kubernetes network policy validator and fixer.
+VALIDATION_PROMPT_CALICO = """You are a Kubernetes network policy validator and fixer.
 
 Your task:
 - Validate that the given YAML correctly implements the provided technical intent.
@@ -212,19 +217,11 @@ OUTPUT RULES (MANDATORY):
 - NO text before or after the YAML.
 
 BIDIRECTIONAL VALIDATION RULE (CRITICAL):
-
 - If the intent implies communication between two services (e.g. "X talks to Y"):
   - The policies created MUST include:
     - Egress from X to Y
     - AND ingress on Y from X
     So there must be at least 2 policies
-
-- If the intent implies bidirectional communication (e.g. "vice versa", "each other", "mutual"):
-  - The policies MUST include BOTH directions:
-    - X → Y
-    - Y → X
-
-- If one direction is missing → the YAML is INVALID and MUST be fixed.
 
 - For DENY intents:
   - If blocking X → Y:
@@ -241,31 +238,66 @@ CALICO SYNTAX (CRITICAL - always enforce):
 - If 'from', 'to', 'podSelector', 'namespaceSelector' are found → replace them.
 - The kind policy for Calico is NetworkPolicy
 
-IMPLICIT DENY RULE (only for Deny policies):
-- In Calico, a policy with ONLY a Deny rule implicitly blocks ALL other traffic too.
-- If the intent is to deny ONLY specific traffic (not all traffic):
-  → You MUST add a final Allow rule to preserve other traffic:
-    - action: Allow
-  → ONLY add this if the intent contains words like "block", "deny", "restrict".
-  → Do NOT add it for pure allow policies.
+IMPLICIT DENY RULE — READ CAREFULLY:
+- This rule applies ONLY when ALL three conditions are true:
+  1. The intent contains "block", "deny", "restrict", or "drop"
+  2. AND the YAML contains at least one "action: Deny" rule
+  3. AND there is no existing "- action: Allow" without destination/source
 
-  If an Allow rule restricts traffic to a specific destination:
-- You MUST add a final "Allow" rule to permit all other traffic
-- Unless the intent explicitly requires restricting all other traffic
+- For a policy that contains ONLY "action: Allow" rules → it is a pure Allow policy
+  → DO NOT add anything → return VALID if everything else is correct
+
+- EXAMPLE of pure Allow policy — return VALID, do NOT modify:
+  egress:
+  - action: Allow
+    destination:
+      selector: app == "checkoutservice"
+  # ← do NOT add "- action: Allow" here
 
 STRUCTURE VALIDATION:
 - Must start with apiVersion
 - Must include: kind, metadata.name, metadata.namespace, spec.selector
 - spec.selector must use Calico syntax (e.g. app == "name"), not matchLabels
+- If metadata.namespace is missing → ADD it with value "default"
+- FORBIDDEN fields: policyTypes, types, from, to — if present → REMOVE them
+
+STRICT CALICO FIELD VALIDATION:
+- If an egress rule contains 'source' → INVALID → REMOVE it
+- If an ingress rule contains 'destination' → INVALID → REMOVE it
+- If 'source: {}' or 'destination: {}' appears → INVALID → REMOVE it
 
 INTENT MATCHING:
 - Source/destination labels must match intent exactly using app == "podname"
 - Direction (Ingress/Egress) must match intent
 - Action (Allow/Deny) must match intent
 
-- Source/destination labels must match intent exactly using app == "podname"
-- Direction (Ingress/Egress) must match intent
-- Action (Allow/Deny) must match intent
+If everything is correct → return: VALID
+Otherwise → return the full corrected YAML."""
+
+VALIDATION_PROMPT_CILIUM = """You are a Kubernetes network policy validator and fixer.
+
+Your task:
+- Validate that the given YAML correctly implements the provided technical intent.
+- If the YAML is incorrect, fix it. If correct, return VALID.
+
+OUTPUT RULES (MANDATORY):
+- Return ONLY the word VALID or the corrected YAML.
+- NO explanations, comments, markdown, or reasoning.
+- NO text before or after the YAML.
+
+BIDIRECTIONAL VALIDATION RULE (CRITICAL):
+- If the intent implies communication between two services (e.g. "X talks to Y"):
+  - The policies created MUST include:
+    - Egress from X to Y
+    - AND ingress on Y from X
+    So there must be at least 2 policies
+
+- For DENY intents:
+  - If blocking X → Y:
+    - Ensure egress from X to Y is denied
+    - AND no rule allows ingress from X to Y
+
+- Reject policies that only define one side when two-sided communication is required.
 
 CILIUM SYNTAX (CRITICAL - always enforce):
 - NEVER add "action" field inside egress, ingress, egressDeny, or ingressDeny rules.
@@ -287,84 +319,126 @@ If everything is correct → return: VALID
 Otherwise → return the full corrected YAML."""
 
 TEST_GENERATOR_PROMPT = """
-You are a Kubernetes network policy testing expert.
+#!/bin/bash is the ONLY valid first line of your response.
 
-You will receive a network intent.
-Your task is to output ONLY an executable bash script that verifies the policy is correctly enforced using kubectl.
+You are a connectivity tester, NOT a policy generator.
+NEVER use kubectl apply. NEVER output YAML. NEVER define policies.
+The policy is already applied — you only test if it works.
 
-STRICT OUTPUT RULES:
+FORBIDDEN:
+- kubectl apply, kubectl create
+- Any YAML content: apiVersion, kind, metadata, spec
+- Inventing service names not provided by the user
+- Using a tool not listed as available in the source pod
 
-* Output ONLY the bash script, nothing else
-* Do NOT write any explanation, reasoning, comments outside the script, or markdown
-* Start the script immediately with #!/bin/bash
-* Do NOT use -i or -t flags in kubectl exec (non-interactive mode only)
-* Do NOT use nc or netcat
-* Do NOT use /dev/tcp
-* Do NOT use curl
+REQUIRED:
+- kubectl get pods
+- kubectl get svc
+- kubectl exec ... <tool>
 
-CONNECTIVITY TEST METHOD (MANDATORY):
+TOOL SELECTION (MANDATORY)
+The user will tell you which tools are available in the source pod.
+ONLY use tools listed as available. Priority: curl > wget > nc > /dev/tcp
+If none are available → print "SKIP: no connectivity tools available in pod" and exit 0
 
-* All pods expose port 80
-* Test connectivity using:
-  kubectl exec <POD> -- wget --spider --timeout=3 http://<service>:80
-* An allowed connection: exit code 0 → SUCCESS
-* A blocked connection: exit code non-zero → SUCCESS
+DNS WARNING (CRITICAL):
+- NEVER use hostnames like http://checkoutservice:80
+- ALWAYS resolve the ClusterIP first and use the IP directly
+- Reason: egress policies may block DNS (port 53 UDP) causing hostname resolution to fail
+  even when the actual connection would be allowed
 
-INTENT TYPE RULES (MANDATORY):
+TEST METHOD BY TOOL
 
-* If the intent is DENY → test that the connection is BLOCKED (exit code != 0)
-* If the intent is ALLOW → test that the connection is ALLOWED (exit code == 0)
-* NEVER output YAML — output ONLY a bash script
-* The script tests connectivity, it does NOT apply or define any policy
-* Do NOT reproduce or reference the NetworkPolicy YAML in the script
+WITH CURL (preferred):
+  SVC_IP=$(kubectl get svc <service> -o jsonpath='{.spec.clusterIP}')
+  HTTP_CODE=$(kubectl exec $SOURCE_POD -- curl --max-time 3 -s -o /dev/null -w "%{http_code}" http://$SVC_IP:80 2>/dev/null)
+  EXIT_CODE=$?
+  ALLOW check: EXIT_CODE == 0 AND HTTP_CODE != "000" → SUCCESS
+  DENY  check: EXIT_CODE != 0 OR  HTTP_CODE == "000" → SUCCESS
 
-### KUBERNETES CNI PROPAGATION RULE (CRITICAL) ###
-Network Policies applied to Kubernetes are not propagated instantaneously by the CNI plugin (e.g., Cilium, Calico). There is a propagation delay.
-To avoid race conditions and false negatives, your test script MUST NOT rely on a single attempt.
+WITH WGET:
+  SVC_IP=$(kubectl get svc <service> -o jsonpath='{.spec.clusterIP}')
+  kubectl exec $SOURCE_POD -- wget --spider --timeout=3 http://$SVC_IP:80 >/dev/null 2>&1
+  EXIT_CODE=$?
+  ALLOW check: EXIT_CODE == 0 → SUCCESS
+  DENY  check: EXIT_CODE != 0 → SUCCESS
 
-### SCRIPT STRUCTURE RULES (MANDATORY) ###
-1.  **Strict Output Rules**: Output ONLY the bash script starting with #!/bin/bash. No markdown, no explanations.
-2.  **Tool Adaptation**: Verify if the pod has 'curl' or 'wget'. If unknown, assume 'wget' or try both.
-3.  **RETRY LOGIC for ALLOW intent (MANDATORY)**:
-    If the intent is ALLOW, a connection failure on the first attempt might be due to propagation delay. You MUST implement a retry loop in Bash:
-    - Attempt the connection (e.g., wget or curl).
-    - If it fails, sleep for 1-2 seconds and retry.
-    - Loop up to **5 attempts** (total max 10 seconds).
-    - If it passes within 5 attempts, log SUCCESS.
-    - If it fails after 5 attempts, log FAIL.
-4.  **RETRY LOGIC for DENY intent (MANDATORY)**:
-    If the intent is DENY, you MUST verify the rule is eventually active. Implement a similar retry loop:
-    - Attempt the connection.
-    - If it SUCCEEDS (meaning it's not yet blocked), sleep and retry.
-    - Loop up to **5 attempts**.
-    - If it fails (blocked) within 5 attempts, log SUCCESS.
-    - If it still succeeds after 5 attempts, log FAIL.
+WITH NC:
+  SVC_IP=$(kubectl get svc <service> -o jsonpath='{.spec.clusterIP}')
+  kubectl exec $SOURCE_POD -- nc -zw3 $SVC_IP 80 >/dev/null 2>&1
+  EXIT_CODE=$?
+  ALLOW check: EXIT_CODE == 0 → SUCCESS
+  DENY  check: EXIT_CODE != 0 → SUCCESS
 
-- Protocol: ALWAYS test TCP connectivity on port 80.
-- Check BOTH exit code and tool output (000/timeout) for reliability.
+BLOCKED SERVICE SELECTION (MANDATORY):
+- The user will explicitly provide SOURCE POD, ALLOWED SERVICE, and BLOCKED SERVICE
+- Use EXACTLY those names — NEVER invent or discover services dynamically
+- NEVER use kubectl get svc with label selectors to find services
+- NEVER use grep, awk, or head to parse service lists
+- If BLOCKED SERVICE is empty → omit the BLOCKED CONNECTIONS section entirely
 
-SCRIPT STRUCTURE (follow exactly):
+SERVICE NOT FOUND HANDLING
+Before using any service, verify it exists:
+  kubectl get svc <service> >/dev/null 2>&1 || { echo "SKIP: <service> not found"; exit 0; }
+
+FAIL FALLBACK (MANDATORY)
+After each loop, if no SUCCESS was printed → print FAIL.
+Always use the RESULT variable pattern:
+
+  RESULT=0
+  for i in 1 2 3 4 5; do
+    <test command>
+    if [ <success condition> ]; then
+      echo "SUCCESS: ..."
+      RESULT=1
+      break
+    fi
+    sleep 2
+  done
+  if [ $RESULT -eq 0 ]; then
+    echo "FAIL: ..."
+  fi
+
+SCRIPT STRUCTURE (follow exactly)
 #!/bin/bash
 set -uo pipefail
 
-# Retrieve pod names
-
 SOURCE_POD=$(kubectl get pods -l app=<source> -o jsonpath='{.items[0].metadata.name}')
+kubectl get svc <allowed-service> >/dev/null 2>&1 || { echo "SKIP: <allowed-service> not found"; exit 0; }
+kubectl get svc <blocked-service> >/dev/null 2>&1 || { echo "SKIP: <blocked-service> not found"; exit 0; }
+ALLOWED_SVC_IP=$(kubectl get svc <allowed-service> -o jsonpath='{.spec.clusterIP}')
+BLOCKED_SVC_IP=$(kubectl get svc <blocked-service> -o jsonpath='{.spec.clusterIP}')
 
 echo "=== ALLOWED CONNECTIONS ==="
-kubectl exec $SOURCE_POD -- wget --spider --timeout=3 http://<allowed-service>:80 >/dev/null 2>&1
-if [ $? -eq 0 ]; then
-echo "SUCCESS: <source> -> <allowed-service> is allowed"
-else
-echo "FAIL: <source> -> <allowed-service> should be allowed but is blocked"
+RESULT=0
+for i in 1 2 3 4 5; do
+  HTTP_CODE=$(kubectl exec $SOURCE_POD -- curl --max-time 3 -s -o /dev/null -w "%{http_code}" http://$ALLOWED_SVC_IP:80 2>/dev/null)
+  EXIT_CODE=$?
+  if [ $EXIT_CODE -eq 0 ] && [ "$HTTP_CODE" != "000" ]; then
+    echo "SUCCESS: <source> -> <allowed-service> is allowed (HTTP $HTTP_CODE)"
+    RESULT=1
+    break
+  fi
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: <source> -> <allowed-service> should be allowed but is blocked"
 fi
 
 echo "=== BLOCKED CONNECTIONS ==="
-kubectl exec $SOURCE_POD -- wget --spider --timeout=3 http://<blocked-service>:80 >/dev/null 2>&1
-if [ $? -ne 0 ]; then
-echo "SUCCESS: <source> -> <blocked-service> is blocked"
-else
-echo "FAIL: <source> -> <blocked-service> should be blocked but is allowed"
+RESULT=0
+for i in 1 2 3 4 5; do
+  HTTP_CODE=$(kubectl exec $SOURCE_POD -- curl --max-time 3 -s -o /dev/null -w "%{http_code}" http://$BLOCKED_SVC_IP:80 2>/dev/null)
+  EXIT_CODE=$?
+  if [ $EXIT_CODE -ne 0 ] || [ "$HTTP_CODE" = "000" ]; then
+    echo "SUCCESS: <source> -> <blocked-service> is blocked"
+    RESULT=1
+    break
+  fi
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: <source> -> <blocked-service> should be blocked but is allowed (HTTP $HTTP_CODE)"
 fi
 """
 
@@ -402,7 +476,6 @@ def extract_yaml(text):
     return text.strip()
 
 def extract_script(text: str) -> str:
-    # remove <think>...</think>
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
 
     match = re.search(r"```(?:bash|sh)\n(.*?)```", text, re.DOTALL)
@@ -411,13 +484,39 @@ def extract_script(text: str) -> str:
         if candidate.startswith("#!/bin/bash"):
             return candidate
 
-    # search for #!/bin/bash 
-    match = re.search(r'(#!/bin/bash.*?)(?:\n\n[A-Z]|\Z)', text, re.DOTALL)
+    match = re.search(r'(#!/bin/bash.*)', text, re.DOTALL)
     if match:
         return match.group(1).strip()
 
-    # Return empty string if not a shell script
     return ""
+
+def get_available_tools(pod_label: str) -> str:
+    """Esegue un check dei tool disponibili nel pod e restituisce una stringa."""
+    import subprocess
+    try:
+        pod_name = subprocess.check_output(
+            ["kubectl", "get", "pods", "-l", f"app={pod_label}",
+             "-o", "jsonpath={.items[0].metadata.name}"],
+            text=True
+        ).strip()
+        
+        if not pod_name:
+            return "unknown"
+
+        result = subprocess.check_output(
+            ["kubectl", "exec", pod_name, "--",
+             "sh", "-c",
+             "which wget 2>/dev/null && echo wget; "
+             "which curl 2>/dev/null && echo curl; "
+             "which nc 2>/dev/null && echo nc; "
+             "which bash 2>/dev/null && echo bash; "
+             "echo done"],
+            text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        
+        return result if result else "none"
+    except Exception as e:
+        return f"unknown (error: {e})"
 
 def generate_text(prompt):
     """Generate and validate the YAML policy"""
@@ -473,6 +572,10 @@ def node_translate(state: PolicyState, client) -> PolicyState:
     return {**state, "technical_prompt": translated}
 
 def node_validate(state: PolicyState, client) -> PolicyState:
+    if "calico" in state["technical_prompt"].lower():
+        VALIDATION_PROMPT = VALIDATION_PROMPT_CALICO
+    else:
+        VALIDATION_PROMPT = VALIDATION_PROMPT_CILIUM
     completion = client.chat.completions.create(
         model=VALIDATOR_MODEL,
         messages=[
@@ -500,6 +603,10 @@ def node_validate(state: PolicyState, client) -> PolicyState:
         }
 
 def node_generate(state: PolicyState, client) -> PolicyState:
+    if "calico" in state["technical_prompt"].lower():
+        SYSTEM_PROMPT = SYSTEM_PROMPT_CALICO
+    else:
+        SYSTEM_PROMPT = SYSTEM_PROMPT_CILIUM
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     
     if state["iterations"] > 0 and state["yaml_output"]:
@@ -524,6 +631,10 @@ def node_generate(state: PolicyState, client) -> PolicyState:
     return {**state, "yaml_output": raw, "iterations": state["iterations"] + 1}
 
 def node_testing(state: PolicyState, client) -> PolicyState:
+    match = re.search(r'app == "(\w+)"', state["technical_prompt"])
+    source_app = match.group(1) if match else "unknown"
+    
+    available_tools = get_available_tools(source_app)
     completion = client.chat.completions.create(
         model=VALIDATOR_MODEL,
         messages=[
@@ -533,12 +644,14 @@ def node_testing(state: PolicyState, client) -> PolicyState:
             },
             {
                 "role": "user",
-                "content": f"INTENT:\n{state['technical_prompt']}"  # ← solo l'intent, non lo YAML
+                "content": f"INTENT:\n{state['technical_prompt']}"
+                f"TOOLS AVAILABLE IN SOURCE POD ({source_app}):\n{available_tools}\n"
             }
         ],
         temperature=0.1,
         max_tokens=4096,
     )
+    print(f"[node_testing] raw output: {completion.choices[0].message.content.strip()}", flush=True)
     script = extract_script(completion.choices[0].message.content.strip())
     return {
         **state,
