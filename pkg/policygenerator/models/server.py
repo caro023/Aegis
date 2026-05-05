@@ -6,6 +6,13 @@ from groq import Groq
 from langgraph.graph import StateGraph, END
 from typing import TypedDict
 from typing import Annotated
+from ollama import Client
+#OLLAMA_API_KEY = os.environ.get("OLLAMA_API_KEY")
+
+ollama_client = Client(
+    host="https://ollama.com",
+    headers={'Authorization': 'Bearer ' + os.environ.get('OLLAMA_API_KEY')}
+)
 
 
 app = Flask(__name__)
@@ -89,6 +96,28 @@ FORBIDDEN PATTERNS:
 - NEVER add 'destination: {}' to ingress rules  
 - An egress rule has ONLY: action + destination (optional)
 - An ingress rule has ONLY: action + source (optional)
+
+PORTS SYNTAX (CRITICAL):
+- Ports go inside destination (for egress) or source (for ingress), NOT as a separate list
+- Port values MUST be integers, not objects
+- CORRECT:
+  egress:
+  - action: Allow
+    destination:
+      selector: app == "redis-cart"
+      ports:
+      - 6379        ← integer only, no protocol/port object
+- INCORRECT:
+  destination:
+    ports:
+    - protocol: TCP   ← FORBIDDEN, port must be integer not object
+      port: 6379
+- If protocol is needed, specify it at rule level:
+  protocol: TCP
+  destination:
+    selector: app == "redis-cart"
+    ports:
+    - 6379
 
 If a policy defines Egress or Ingress rules, all other traffic is implicitly denied unless explicitly allowed.
 
@@ -230,7 +259,7 @@ BIDIRECTIONAL VALIDATION RULE (CRITICAL):
 
 - Reject policies that only define one side when two-sided communication is required.
 
-CALICO SYNTAX (CRITICAL - always enforce):
+SYNTAX (CRITICAL - always enforce):
 - ingress rules: use 'source' to match origin pods. NEVER use 'from'.
 - egress rules: use 'destination' to match target pods. NEVER use 'to'.
 - NEVER use 'podSelector' or 'namespaceSelector'.
@@ -265,6 +294,28 @@ STRICT CALICO FIELD VALIDATION:
 - If an egress rule contains 'source' → INVALID → REMOVE it
 - If an ingress rule contains 'destination' → INVALID → REMOVE it
 - If 'source: {}' or 'destination: {}' appears → INVALID → REMOVE it
+
+PORTS SYNTAX (CRITICAL):
+- Ports go inside destination (for egress) or source (for ingress), NOT as a separate list
+- Port values MUST be integers, not objects
+- CORRECT:
+  egress:
+  - action: Allow
+    destination:
+      selector: app == "redis-cart"
+      ports:
+      - 6379        ← integer only, no protocol/port object
+- INCORRECT:
+  destination:
+    ports:
+    - protocol: TCP   ← FORBIDDEN, port must be integer not object
+      port: 6379
+- If protocol is needed, specify it at rule level:
+  protocol: TCP
+  destination:
+    selector: app == "redis-cart"
+    ports:
+    - 6379
 
 INTENT MATCHING:
 - Source/destination labels must match intent exactly using app == "podname"
@@ -341,6 +392,17 @@ The user will tell you which tools are available in the source pod.
 ONLY use tools listed as available. Priority: curl > wget > nc > /dev/tcp
 If none are available → print "SKIP: no connectivity tools available in pod" and exit 0
 
+PROTOCOL AWARE TESTING (CRITICAL):
+
+- If target port is NOT HTTP (e.g. 6379, 3306, 5432, etc):
+  DO NOT use curl or wget
+
+- Instead:
+  use nc if available
+  otherwise use /dev/tcp
+
+- curl MUST be used ONLY for HTTP-based services (port 80 or when explicitly HTTP)
+
 DNS WARNING (CRITICAL):
 - NEVER use hostnames like http://checkoutservice:80
 - ALWAYS resolve the ClusterIP first and use the IP directly
@@ -370,12 +432,31 @@ WITH NC:
   ALLOW check: EXIT_CODE == 0 → SUCCESS
   DENY  check: EXIT_CODE != 0 → SUCCESS
 
-BLOCKED SERVICE SELECTION (MANDATORY):
-- The user will explicitly provide SOURCE POD, ALLOWED SERVICE, and BLOCKED SERVICE
+SCRIPT STRUCTURE (adaptive)
+1. Always resolve SOURCE_POD
+
+2. If ALLOWED SERVICE is provided:
+   - validate existence
+   - resolve ClusterIP
+   - run ALLOWED test
+
+3. If BLOCKED SERVICE is provided:
+   - validate existence
+   - resolve ClusterIP
+   - run BLOCKED test
+
+BLOCKED SERVICE SELECTION:
+- The user will explicitly provide SOURCE POD and may provide ALLOWED SERVICE and BLOCKED SERVICE
 - Use EXACTLY those names — NEVER invent or discover services dynamically
 - NEVER use kubectl get svc with label selectors to find services
 - NEVER use grep, awk, or head to parse service lists
 - If BLOCKED SERVICE is empty → omit the BLOCKED CONNECTIONS section entirely
+
+CRITICAL ANTI-LOOP RULE:
+- If a service (allowed or blocked) is NOT provided, DO NOT try to infer it
+- DO NOT reason about missing services
+- Simply skip that section
+- NEVER attempt to "figure out" missing inputs
 
 SERVICE NOT FOUND HANDLING
 Before using any service, verify it exists:
@@ -440,6 +521,11 @@ done
 if [ $RESULT -eq 0 ]; then
   echo "FAIL: <source> -> <blocked-service> should be blocked but is allowed (HTTP $HTTP_CODE)"
 fi
+
+DO NOT THINK.
+DO NOT EXPLAIN.
+OUTPUT ONLY THE FINAL SCRIPT.
+NO <think> blocks.
 """
 
 GROQ_MODEL = None
@@ -602,11 +688,69 @@ def node_validate(state: PolicyState, client) -> PolicyState:
             "validation_done": True
         }
 
+#def node_generate(state: PolicyState, client) -> PolicyState:
+#    if "calico" in state["technical_prompt"].lower():
+#        SYSTEM_PROMPT = SYSTEM_PROMPT_CALICO
+#    else:
+#        SYSTEM_PROMPT = SYSTEM_PROMPT_CILIUM
+#    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+#    
+#    if state["iterations"] > 0 and state["yaml_output"]:
+#        messages.append({
+#            "role": "user",
+#            "content": (
+#                f"{state['technical_prompt']}\n\n"
+#                f"Previous attempt was invalid. Here is the partially corrected YAML — "
+#                f"fix any remaining issues:\n{state['yaml_output']}"
+#            )
+#        })
+#    else:
+#        messages.append({"role": "user", "content": state["technical_prompt"]})
+#
+#    completion = client.chat.completions.create(
+#        model=GENERATOR_MODEL,  
+#        messages=messages,
+#        temperature=0.0,
+#        max_tokens=4096,    
+#    )
+#    raw = extract_yaml(completion.choices[0].message.content.strip())  
+#    return {**state, "yaml_output": raw, "iterations": state["iterations"] + 1}
+#
+#
+#def node_testing(state: PolicyState, client) -> PolicyState:
+#    match = re.search(r'app == "(\w+)"', state["technical_prompt"])
+#    source_app = match.group(1) if match else "unknown"
+#    
+#    available_tools = get_available_tools(source_app)
+#    completion = client.chat.completions.create(
+#        model=VALIDATOR_MODEL,
+#        messages=[
+#            {
+#                "role": "system",
+#                "content": TEST_GENERATOR_PROMPT
+#            },
+#            {
+#                "role": "user",
+#                "content": f"INTENT:\n{state['technical_prompt']}"
+#                f"TOOLS AVAILABLE IN SOURCE POD ({source_app}):\n{available_tools}\n"
+#            }
+#        ],
+#        temperature=0.1,
+#        max_tokens=4096,
+#    )
+#    print(f"[node_testing] raw output: {completion.choices[0].message.content.strip()}", flush=True)
+#    script = extract_script(completion.choices[0].message.content.strip())
+#    return {
+#        **state,
+#        "test_script": script,
+#        "testing_done": True
+#    }
 def node_generate(state: PolicyState, client) -> PolicyState:
     if "calico" in state["technical_prompt"].lower():
         SYSTEM_PROMPT = SYSTEM_PROMPT_CALICO
     else:
         SYSTEM_PROMPT = SYSTEM_PROMPT_CILIUM
+
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     
     if state["iterations"] > 0 and state["yaml_output"]:
@@ -614,50 +758,62 @@ def node_generate(state: PolicyState, client) -> PolicyState:
             "role": "user",
             "content": (
                 f"{state['technical_prompt']}\n\n"
-                f"Previous attempt was invalid. Here is the partially corrected YAML — "
-                f"fix any remaining issues:\n{state['yaml_output']}"
+                f"Previous attempt was invalid. Fix this YAML:\n{state['yaml_output']}"
             )
         })
     else:
-        messages.append({"role": "user", "content": state["technical_prompt"]})
+        messages.append({
+            "role": "user",
+            "content": state["technical_prompt"]
+        })
 
-    completion = client.chat.completions.create(
-        model=GENERATOR_MODEL,  
+    completion = ollama_client.chat(
+        model="minimax-m2.5:cloud",
         messages=messages,
-        temperature=0.0,
-        max_tokens=4096,    
+        options={"temperature": 0.0}  # ← Ollama usa 'options' non parametri diretti
     )
-    raw = extract_yaml(completion.choices[0].message.content.strip())  # ← rimuove <think>
-    return {**state, "yaml_output": raw, "iterations": state["iterations"] + 1}
+
+    raw = extract_yaml(completion['message']['content'].strip())  # ← dizionario
+
+    return {
+        **state,
+        "yaml_output": raw,
+        "iterations": state["iterations"] + 1
+    }
+
 
 def node_testing(state: PolicyState, client) -> PolicyState:
     match = re.search(r'app == "(\w+)"', state["technical_prompt"])
     source_app = match.group(1) if match else "unknown"
     
     available_tools = get_available_tools(source_app)
-    completion = client.chat.completions.create(
-        model=VALIDATOR_MODEL,
+
+    completion = ollama_client.chat(
+        model="qwen3-coder-next",
         messages=[
-            {
-                "role": "system",
-                "content": TEST_GENERATOR_PROMPT
-            },
+            {"role": "system", "content": TEST_GENERATOR_PROMPT},
             {
                 "role": "user",
-                "content": f"INTENT:\n{state['technical_prompt']}"
-                f"TOOLS AVAILABLE IN SOURCE POD ({source_app}):\n{available_tools}\n"
+                "content": (
+                    f"INTENT:\n{state['technical_prompt']}\n"
+                    f"TOOLS AVAILABLE IN SOURCE POD ({source_app}):\n{available_tools}\n"
+                )
             }
         ],
-        temperature=0.1,
-        max_tokens=4096,
+        options={"temperature": 0.1}
     )
-    print(f"[node_testing] raw output: {completion.choices[0].message.content.strip()}", flush=True)
-    script = extract_script(completion.choices[0].message.content.strip())
+
+    raw = completion['message']['content'].strip()  # ← dizionario
+    print(f"[node_testing] raw output: {raw[:200]}", flush=True)
+
+    script = extract_script(raw)
+
     return {
         **state,
         "test_script": script,
         "testing_done": True
     }
+
 
 def node_join(state: PolicyState) -> PolicyState:
     return state
