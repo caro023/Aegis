@@ -1,10 +1,19 @@
 package utils
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/remotecommand"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	"gopkg.in/yaml.v3"
 	v1 "k8s.io/api/core/v1"
@@ -69,4 +78,38 @@ func logFailureWithTimestamp(message string) {
 // logSuccessWithTimestamp logs success messages with a timestamp
 func logSuccessWithTimestamp(message string) {
 	fmt.Printf("%s: %s", time.Now().Format(time.RFC3339), message)
+}
+
+func ExecInPod(ctx context.Context, c client.Client, namespace, podName, containerName string, command []string) (string, error) {
+	restConfig, err := config.GetConfig()
+	if err != nil {
+		return "", err
+	}
+
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return "", err
+	}
+
+	req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: containerName,
+			Command:   command,
+			Stdout:    true,
+			Stderr:    false,
+			TTY:       false,
+		}, scheme.ParameterCodec)
+
+	executor, err := remotecommand.NewSPDYExecutor(restConfig, "POST", req.URL())
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &buf})
+	return buf.String(), err
 }

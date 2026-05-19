@@ -16,7 +16,8 @@ type Configuration struct {
 }
 
 type Prompt struct {
-	Network []string
+	Network      []string
+	PodDiscovery []PodDiscoveryInfo
 }
 
 type Entity struct {
@@ -64,4 +65,43 @@ type YAMLInfo struct {
 	Name      string            `yaml:"name"`
 	Namespace string            `yaml:"namespace"`
 	Labels    map[string]string `yaml:"labels"`
+}
+
+type IntentQueue struct {
+	Ch chan string
+}
+
+func NewIntentQueue(size int) *IntentQueue {
+	return &IntentQueue{Ch: make(chan string, size)}
+}
+
+func (q *IntentQueue) Push(intent string) bool {
+	select {
+	case q.Ch <- intent:
+		return true
+	default:
+		return false
+	}
+}
+
+func (q *IntentQueue) Pop() (string, bool) {
+	select {
+	case intent := <-q.Ch:
+		return intent, true
+	default:
+		return "", false
+	}
+}
+
+type PodDiscoveryInfo struct {
+	Name           string
+	Namespace      string
+	Ports          []PortInfo
+	Labels         map[string]string
+	AvailableTools []string // es. curl, wget, nc, nmap
+}
+
+type PortInfo struct {
+	Port     int32
+	Protocol string // TCP, UDP, SCTP
 }

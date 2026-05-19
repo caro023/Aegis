@@ -16,47 +16,14 @@ require (
 )
 
 require (
-	github.com/cilium/ebpf v0.17.1 // indirect
-	github.com/cilium/hive v0.0.0-20250121145729-e67f66eb0375 // indirect
-	github.com/cilium/proxy v0.0.0-20250408103314-d3be7c547203 // indirect
-	github.com/cilium/statedb v0.3.6 // indirect
-	github.com/cilium/stream v0.0.0-20241203114243-53c3e5d79744 // indirect
-	github.com/go-openapi/analysis v0.23.0 // indirect
-	github.com/go-openapi/errors v0.22.0 // indirect
-	github.com/go-openapi/loads v0.22.0 // indirect
-	github.com/go-openapi/runtime v0.28.0 // indirect
-	github.com/go-openapi/spec v0.21.0 // indirect
-	github.com/go-openapi/strfmt v0.23.0 // indirect
-	github.com/go-openapi/validate v0.24.0 // indirect
-	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
-	github.com/gopacket/gopacket v1.3.1 // indirect
-	github.com/hashicorp/hcl v1.0.1-vault-5 // indirect
+	github.com/evanphx/json-patch v5.9.0+incompatible // indirect
+	github.com/gorilla/websocket v1.5.1 // indirect
 	github.com/klauspost/compress v1.17.9 // indirect
-	github.com/mackerelio/go-osstat v0.2.5 // indirect
-	github.com/magiconair/properties v1.8.7 // indirect
-	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
-	github.com/oklog/ulid v1.3.1 // indirect
-	github.com/opentracing/opentracing-go v1.2.1-0.20220228012449-10b1cf09e00b // indirect
-	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
-	github.com/petermattis/goid v0.0.0-20240813172612-4fcff4a6cae7 // indirect
-	github.com/sagikazarmark/locafero v0.4.0 // indirect
-	github.com/sagikazarmark/slog-shim v0.1.0 // indirect
-	github.com/sasha-s/go-deadlock v0.3.5 // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
-	github.com/sourcegraph/conc v0.3.0 // indirect
-	github.com/spf13/afero v1.11.0 // indirect
-	github.com/spf13/cast v1.7.0 // indirect
-	github.com/spf13/viper v1.19.0 // indirect
-	github.com/subosito/gotenv v1.6.0 // indirect
-	github.com/vishvananda/netlink v1.3.1-0.20250303224720-0e7078ed04c8 // indirect
-	github.com/vishvananda/netns v0.0.5 // indirect
+	github.com/moby/spdystream v0.5.0 // indirect
+	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
 	github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
-	go.mongodb.org/mongo-driver v1.14.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
-	go.uber.org/dig v1.17.1 // indirect
-	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
-	gopkg.in/ini.v1 v1.67.0 // indirect
 )
 
 require (
@@ -67,7 +34,6 @@ require (
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/cilium/cilium v1.17.4
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.12.0 // indirect
 	github.com/evanphx/json-patch/v5 v5.9.11 // indirect
@@ -95,7 +61,6 @@ require (
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
-	github.com/mitchellh/mapstructure v1.5.0
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect

@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -36,9 +37,13 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/remotecommand"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -58,14 +63,243 @@ type KubeTeusReconciler struct {
 	Model  string
 	Mode   string
 	Intent *string
+	Queue  *utils.IntentQueue
 
-	startTime  time.Time
-	HTTPClient *http.Client
+	startTime    time.Time
+	HTTPClient   *http.Client
+	podInfoCache []utils.PodDiscoveryInfo
 }
 
 func (r *KubeTeusReconciler) SetIntent(intent string) {
 	*r.Intent = intent
 	r.Reconcile(context.TODO(), ctrl.Request{})
+}
+
+func (r *KubeTeusReconciler) EnqueueIntent(intent string) (bool, error) {
+	ok := r.Queue.Push(intent)
+	if !ok {
+		return false, fmt.Errorf("queue is full (max 50 intents)")
+	}
+	return true, nil
+}
+
+// Avviato come goroutine in SetupWithManager
+func (r *KubeTeusReconciler) runQueueWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case intent := <-r.Queue.Ch: // <-- Ch maiuscola
+			reqCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			r.processIntent(reqCtx, intent)
+			cancel()
+		}
+	}
+}
+
+func (r *KubeTeusReconciler) refreshPodInfoCache(ctx context.Context) {
+	logger := log.FromContext(ctx)
+	info, err := r.discoverPodInfo(ctx)
+	if err != nil {
+		logger.Error(err, "failed to refresh pod info cache")
+		return
+	}
+	r.podInfoCache = info
+	logger.Info("Pod info cache refreshed", "pods", len(info))
+}
+
+func (r *KubeTeusReconciler) processIntent(ctx context.Context, intent string) {
+	logger := log.FromContext(ctx)
+
+	servicesContext, err := r.getClusterServices(ctx)
+	if err != nil {
+		logger.Error(err, "failed to get cluster services")
+		return
+	}
+
+	podInfoList := r.podInfoCache
+	if len(podInfoList) == 0 {
+		logger.Info("Pod info cache not ready yet, discovering now...")
+		discovered, err := r.discoverPodInfo(ctx)
+		if err == nil {
+			r.podInfoCache = discovered  
+			podInfoList = discovered
+		}
+	}
+
+
+	cniType, err := detectCNIPlugin(ctx, r.Client)
+	if err != nil {
+		logger.Error(err, "failed to detect CNI")
+		return
+	}
+
+	var finalPrompt string
+	switch cniType {
+	case "cilium":
+		finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a CiliumNetworkPolicy.", intent, servicesContext)
+	case "calico":
+		apiVersion := detectCalicoAPIVersion(ctx, r.Client)
+		finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a CalicoNetworkPolicy with apiVersion: %s.", intent, servicesContext, apiVersion)
+	default:
+		finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a Kubernetes NetworkPolicy.", intent, servicesContext)
+	}
+
+	var prompts utils.Prompt
+	prompts.Network = append(prompts.Network, finalPrompt)
+
+	// Passa le info di discovery al server per la generazione dello script di test
+	if len(podInfoList) > 0 {
+		prompts.PodDiscovery = podInfoList // vedi nota sotto su utils.Prompt
+	}
+
+	var policies utils.Policy
+	for i := 0; i < maxRetries; i++ {
+		policies, err = policygenerator.PolicyGenerator(ctx, r.Client, r.Model, prompts)
+		if err == nil && len(policies.Network) > 0 {
+			break
+		}
+		logger.Info("Policy generation attempt failed, retrying", "attempt", i+1, "error", err)
+		time.Sleep(retryInterval)
+	}
+	if err != nil || len(policies.Network) == 0 {
+		logger.Error(err, "failed to generate policies after retries")
+		return
+	}
+
+	logger.Info("Policies generated", "count", len(policies.Network))
+
+	var podInfo utils.NetInfo
+	var entities []utils.Entity
+	validationErrors, err := validator.Validator(ctx, r.Client, logger, podInfo, entities, policies.Network)
+	if err != nil {
+		logger.Error(err, "Validator error")
+		return
+	}
+	if len(validationErrors) > 0 {
+		logger.Error(fmt.Errorf("validation failed"), "errors", validationErrors)
+		return
+	}
+
+	if err = enforcer.Enforcer(ctx, r.Client, policies.Network); err != nil {
+		logger.Error(err, "failed to enforce policy")
+		return
+	}
+	logger.Info("Policies enforced")
+
+	if policies.TestScript != "" {
+		output, err := tester.RunTestScript(ctx, policies.TestScript)
+		if err != nil {
+			logger.Info("Tests FAILED — rolling back")
+			if rollbackErr := enforcer.Rollback(ctx, r.Client, policies.Network); rollbackErr != nil {
+				logger.Error(rollbackErr, "Rollback failed")
+			} else {
+				logger.Info("Rollback completed")
+			}
+		} else {
+			logger.Info("Tests passed", "output", output)
+		}
+	} else {
+		logger.Info("No test script, skipping tests")
+	}
+}
+
+func (r *KubeTeusReconciler) discoverPodInfo(ctx context.Context) ([]utils.PodDiscoveryInfo, error) {
+	podList := &v1.PodList{}
+	if err := r.List(ctx, podList); err != nil {
+		return nil, err
+	}
+
+	var result []utils.PodDiscoveryInfo
+
+	for _, pod := range podList.Items {
+		// Salta i pod non Running
+		if pod.Status.Phase != v1.PodRunning {
+			continue
+		}
+
+		info := utils.PodDiscoveryInfo{
+			Name:      pod.Name,
+			Namespace: pod.Namespace,
+			Labels:    pod.Labels,
+		}
+
+		// Raccogli porte e protocolli da tutti i container
+		for _, container := range pod.Spec.Containers {
+			for _, port := range container.Ports {
+				proto := string(port.Protocol)
+				if proto == "" {
+					proto = "TCP"
+				}
+				info.Ports = append(info.Ports, utils.PortInfo{
+					Port:     port.ContainerPort,
+					Protocol: proto,
+				})
+			}
+		}
+
+		// Scopri tool disponibili eseguendo un comando nel pod
+		tools := r.detectAvailableTools(ctx, pod)
+		info.AvailableTools = tools
+		fmt.Printf("Pod %s tools: %v\n", pod.Name, tools)
+
+		result = append(result, info)
+	}
+	fmt.Printf("Discovery result: %+v\n", result)
+	return result, nil
+}
+
+// detectAvailableTools prova a eseguire 'which <tool>' nel primo container del pod.
+func (r *KubeTeusReconciler) detectAvailableTools(ctx context.Context, pod v1.Pod) []string {
+	candidates := []string{"curl", "wget", "nc", "ncat", "nmap", "ping", "telnet", "openssl"}
+	var found []string
+
+	if len(pod.Spec.Containers) == 0 {
+		return found
+	}
+	containerName := pod.Spec.Containers[0].Name
+
+	for _, tool := range candidates {
+		out, err := ExecInPod(ctx, r.Client, pod.Namespace, pod.Name, containerName, []string{"which", tool})
+		if err == nil && strings.TrimSpace(out) != "" {
+			found = append(found, tool)
+		}
+	}
+	return found
+}
+
+func ExecInPod(ctx context.Context, c client.Client, namespace, podName, containerName string, command []string) (string, error) {
+	restConfig, err := config.GetConfig()
+	if err != nil {
+		return "", err
+	}
+
+	clientset, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return "", err
+	}
+
+	req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&v1.PodExecOptions{
+			Container: containerName,
+			Command:   command,
+			Stdout:    true,
+			Stderr:    false,
+			TTY:       false,
+		}, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(restConfig, "POST", req.URL())
+	if err != nil {
+		return "", err
+	}
+
+	var buf bytes.Buffer
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &buf})
+	return buf.String(), err
 }
 
 // +kubebuilder:rbac:groups=policy,resources=kubeteuses,verbs=get;list;watch;create;update;patch;delete
@@ -124,7 +358,7 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		logger.Info("Intent not found")
 		return doNotRequeue()
 	}
-	logger.Info("Prompts created", "Network Prompts", prompts.Network)
+	logger.Info("Prompts created") //, "Network Prompts", prompts.Network)
 	if len(prompts.Network) == 0 {
 		logger.Error(fmt.Errorf("no prompts generated"), "empty prompt pipeline")
 		return doNotRequeue()
@@ -207,8 +441,34 @@ func StartPredicate(startTime time.Time) predicate.Predicate {
 // SetupWithManager sets up the controller with the Manager.
 func (r *KubeTeusReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.startTime = time.Now()
+	r.Queue = utils.NewIntentQueue(50)
+
+	ctx := context.Background() // oppure passa il ctx del manager se disponibile
+	r.refreshPodInfoCache(ctx)
 
 	go func() {
+		ticker := time.NewTicker(100 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				r.refreshPodInfoCache(ctx)
+			}
+		}
+	}()
+
+	go r.runQueueWorker(ctx)
+
+	go func() {
+		srv := &http.Server{
+			Addr:         ":9090",
+			ReadTimeout:  5 * time.Minute,
+			WriteTimeout: 6 * time.Minute,
+			IdleTimeout:  60 * time.Second,
+		}
+
 		http.HandleFunc("/intent", func(w http.ResponseWriter, req *http.Request) {
 			if req.Method != "POST" {
 				http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
@@ -221,9 +481,19 @@ func (r *KubeTeusReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			}
 			defer req.Body.Close()
 
-			r.SetIntent(string(body))
+			ok, err := r.EnqueueIntent(strings.TrimSpace(string(body)))
+			fmt.Printf("Intent: %s\n", body)
+			if !ok {
+				http.Error(w, fmt.Sprintf("Queue full: %v", err), http.StatusTooManyRequests)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+			fmt.Fprintf(w, "Intent enqueued. Queue length: %d/50\n", len(r.Queue.Ch))
 		})
-		http.ListenAndServe(":9090", nil)
+
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			fmt.Printf("HTTP server error: %v\n", err)
+		}
 	}()
 
 	return ctrl.NewControllerManagedBy(mgr).
