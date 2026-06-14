@@ -28,6 +28,7 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -45,17 +46,20 @@ import (
 )
 
 var (
-	scheme   = runtime.NewScheme()
-	setupLog = ctrl.Log.WithName("setup")
-	model    string
-	mode     string
-	intent   string
+	scheme        = runtime.NewScheme()
+	setupLog      = ctrl.Log.WithName("setup")
+	model         string
+	mode          string
+	intent        string
+	testNamespace string
 )
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
 	flag.StringVar(&model, "model", "default", "Model to use for the controller")
 	flag.StringVar(&mode, "mode", "user", "Mode to use for the controller")
+	flag.StringVar(&testNamespace, "test-namespace", "default", "Namespace for test pods and policies")
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -217,12 +221,13 @@ func main() {
 	}
 
 	if err = (&controller.KubeTeusReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
-		Model:      model,   // Passing Model values to the reconciler
-		Mode:       mode,    // Passing Mode values to the reconciler
-		Intent:     &intent, // Passing Intent values to the reconciler
-		HTTPClient: &http.Client{},
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Model:         model,   // Passing Model values to the reconciler
+		Mode:          mode,    // Passing Mode values to the reconciler
+		Intent:        &intent, // Passing Intent values to the reconciler
+		HTTPClient:    &http.Client{},
+		TestNamespace: testNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "KubeTeus")
 		os.Exit(1)
@@ -263,7 +268,10 @@ func main() {
 
 func startPythonServer(model, port string) *exec.Cmd {
 
-	cmd := exec.Command("python3", "pkg/policygenerator/models/server.py", "--model", model, "--port", port)
+	cmd := exec.Command("python3", "pkg/policygenerator/models/server.py",
+		"--model", model,
+		"--port", port,
+		"--test-namespace", testNamespace)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd

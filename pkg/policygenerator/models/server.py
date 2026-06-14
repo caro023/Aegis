@@ -18,6 +18,8 @@ INTENT_MODEL = "llama-3.3-70b-versatile"
 LLM_TIMEOUT_SECONDS = 180
 REQUEST_TIMEOUT_SECONDS = 300
 
+TEST_NAMESPACE = "default"
+
 ollama_client = Client(
     host="https://ollama.com",
     headers={'Authorization': 'Bearer ' + os.environ.get('OLLAMA_API_KEY')},
@@ -60,7 +62,19 @@ DENY/ALLOW DISAMBIGUATION (MANDATORY):
 - If the intent uses words like "allow", "permit", "enable" → the action is ALLOW.
 - Always state the action explicitly as "allow" or "deny" in your output.
 - Never use ambiguous terms like "control" or "manage".
-Output ONLY the translated prompt, no explanations."""
+Output ONLY the translated prompt, no explanations.
+
+NAMESPACE RULE (MANDATORY):
+- If the input intent specifies a namespace (e.g. "in the X namespace",
+  "Apply the policy to the X namespace"), you MUST explicitly restate that
+  namespace at the end of your output, e.g.:
+  "...Generate a CiliumNetworkPolicy in namespace test-pods."
+- NEVER omit the namespace if the input mentions one, even if you also
+  mentioned it earlier in the sentence.
+- If no namespace is mentioned in the input, do not invent one.
+
+"""
+
 
 SYSTEM_PROMPT_CALICO = """You are a Kubernetes security engineer.
 Your task is to generate valid, production-ready YAML for CalicoNetworkPolicy or standard NetworkPolicy.
@@ -86,8 +100,7 @@ STRICT SYNTAX RULES FOR CALICO:
   - selector
 
   REQUIRED FIELDS:
-- metadata.namespace MUST always be present and set to: default
-- NEVER omit metadata.namespace
+- metadata.namespace MUST always be present. Set the namespace as the one specified in the intent
 
   FORBIDDEN FIELDS (NEVER use these):
 - policyTypes    ← Kubernetes field, NOT Calico
@@ -191,10 +204,10 @@ STRICT SYNTAX RULES FOR CILIUM:
 7. NEVER use 'action', 'Allow', 'Deny' — these are Calico fields.
 8. NEVER use 'policyTypes', 'rules', 'podSelector', 'namespaceSelector'.
 9. NEVER use 'selector: app == "name"' — this is Calico syntax, FORBIDDEN in Cilium.
-10. metadata.namespace MUST always be present and set to: default.
+10. metadata.namespace MUST always be present. Use the namespace specified in the input prompt.
+If no namespace is specified use "default"
 
 REQUIRED FIELDS:
-- metadata.namespace MUST always be present.
 - spec.endpointSelector MUST always be present.
 - toPorts MUST always be present in allow rules (ingress and egress).
 
@@ -278,7 +291,7 @@ apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: allow-checkoutservice-from-frontend
-  namespace: default
+  namespace: test
 spec:
   endpointSelector:
     matchLabels:
@@ -335,6 +348,7 @@ SYNTAX (CRITICAL - always enforce):
 - 'egress' and 'ingress' MUST be lists, never objects ({}).
 - If 'from', 'to', 'podSelector', 'namespaceSelector' are found → replace them.
 - The kind policy for Calico is NetworkPolicy
+- Use the namespace specified in the input prompt. If no namespace is specified use "default"
 
 IMPLICIT DENY RULE — READ CAREFULLY:
 - This rule applies ONLY when ALL three conditions are true:
@@ -382,7 +396,7 @@ STRUCTURE VALIDATION:
 - Must start with apiVersion
 - Must include: kind, metadata.name, metadata.namespace, spec.selector
 - spec.selector must use Calico syntax (e.g. app == "name"), not matchLabels
-- If metadata.namespace is missing → ADD it with value "default"
+- If metadata.namespace is missing → ADD it 
 - FORBIDDEN fields: policyTypes, types, from, to — if present → REMOVE them
 
 STRICT CALICO FIELD VALIDATION:
@@ -444,11 +458,11 @@ STRUCTURE VALIDATION (check in this order):
 1. apiVersion must be 'cilium.io/v2'.
 2. kind must be 'CiliumNetworkPolicy'.
 3. metadata.name must exist in kebab-case.
-4. metadata.namespace must exist → if missing, ADD it with value 'default'.
-5. spec.endpointSelector must exist with matchLabels.
-6. Ingress/egress rules must use fromEndpoints/toEndpoints with matchLabels.
-7. Allow rules MUST have toPorts with port (string) and protocol.
-8. Deny rules MUST use ingressDeny/egressDeny and MUST NOT have toPorts.
+4. spec.endpointSelector must exist with matchLabels.
+5. Ingress/egress rules must use fromEndpoints/toEndpoints with matchLabels.
+6. Allow rules MUST have toPorts with port (string) and protocol.
+7. Deny rules MUST use ingressDeny/egressDeny and MUST NOT have toPorts.
+8. Use the namespace specified in the input prompt. If no namespace is specified use "default"
 
 LABEL VALIDATION:
 - Must use: matchLabels: { app: <name> }
@@ -503,172 +517,100 @@ spec:
 If ALL checks pass → return: VALID
 Otherwise → return the full corrected YAML.
 """
+
 TEST_GENERATOR_PROMPT = """
 #!/bin/bash is the ONLY valid first line of your response.
+OUTPUT ONLY A VALID BASH SCRIPT. NO YAML. NO KUBECTL APPLY. NO EXPLANATIONS.
 
-You are a connectivity tester, NOT a policy generator.
-NEVER use kubectl apply. NEVER output YAML. NEVER define policies.
-The policy is already applied — you only test if it works.
+CRITICAL RULES:
+1. NEVER use kubectl apply, kubectl create, kubectl delete inside the script
+2. NEVER consider HTTP 000 as success — it means connection refused/timeout
+3. SOURCE_POD is always the pod initiating the connection (egress side)
+4. TARGET is always the service receiving the connection
+5. ALWAYS use -n <namespace> in every kubectl command — never omit namespace
+6. You MUST use EXACTLY the tool given in "TOOL TO USE". NEVER substitute it,
+   NEVER fall back to a different tool because of the port number, and NEVER
+   add your own "port rules" — TOOL TO USE is already chosen correctly based
+   on the tools actually available in the source pod.
+7. If TOOL TO USE is "none", the source pod has NO usable networking tool.
+   Output ONLY:
+     #!/bin/bash
+     echo "SKIP: no networking tool available in source pod"
+     exit 0
+   Do not attempt any connection.
 
-FORBIDDEN:
-- kubectl apply, kubectl create
-- Any YAML content: apiVersion, kind, metadata, spec
-- Inventing service names not provided by the user
-- Using a tool not listed as available in the source pod
+PROTOCOL NOTE:
+- TARGET PROTOCOL is given in the input (TCP or UDP).
+- If TARGET PROTOCOL is UDP, add "-u" to nc/ncat commands below.
+- curl, wget, telnet, openssl, devtcp are NOT reliable for UDP. If TARGET
+  PROTOCOL is UDP and TOOL TO USE is one of curl/wget/telnet/openssl/devtcp,
+  output the SKIP script from rule 7 instead (do not invent a UDP check).
 
-REQUIRED:
-- kubectl get pods
-- kubectl get svc
-- kubectl exec ... <tool>
+PER-TOOL TEST COMMAND (use the ONE matching TOOL TO USE):
 
-TOOL SELECTION (MANDATORY)
-The user will tell you which tools are available in the source pod.
-ONLY use tools listed as available. If HTTP priority: curl > wget > nc > /dev/tcp. Else priority_ /dev/tcp > nc > wget
-If none are available → print "SKIP: no connectivity tools available in pod" and exit 0
-BY PORT (MANDATORY - NO EXCEPTIONS):
-- Read SVC_PORT from the Service spec FIRST
-- IF SVC_PORT == 80 OR SVC_PORT == 8080 → use curl
-- IF SVC_PORT is anything else → use nc
-- NEVER use curl on ports like 3550, 7070, 6379, 50051, 5000, 5050
+- curl  (ONLY if SVC_PORT is "80" or "8080"; HTTP check):
+    HTTP_CODE=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- curl --max-time 3 -s -o /dev/null -w "%{http_code}" http://$SVC_IP:$SVC_PORT 2>/dev/null)
+    SUCCESS_COND=$( [ "$HTTP_CODE" != "000" ] && echo 1 || echo 0 )
 
-PORT RESOLUTION (CRITICAL — NEVER HARDCODE PORTS):
-- ALWAYS read both the ClusterIP and the port from the Service spec:
-  SVC_IP=$(kubectl get svc <service> -o jsonpath='{.spec.clusterIP}')
-  SVC_PORT=$(kubectl get svc <service> -o jsonpath='{.spec.ports[0].port}')
-- NEVER hardcode port 80 or any other port
-- Use $SVC_PORT in ALL curl/nc/wget commands
-- This is mandatory because services expose non-standard ports (e.g. 3550, 7070, 6379, 50051)
+- wget  (ONLY if SVC_PORT is "80" or "8080"; HTTP check):
+    kubectl exec -n $SOURCE_NS $SOURCE_POD -- wget -T 3 -q -O /dev/null http://$SVC_IP:$SVC_PORT >/dev/null 2>&1
+    EXIT_CODE=$?
+    SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
 
-TOOL SELECTION BY PORT (CRITICAL):
-- Port 80 or 8080 → use curl if available
-- Any other port (3550, 7070, 6379, 50051, 5000, etc.) → use nc if available
-- If nc not available for non-HTTP ports → use /dev/tcp
-- NEVER use curl on non-HTTP ports like 6379, 3550, 50051
+- nc    (raw TCP/UDP connect check, any port):
+    kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT >/dev/null 2>&1
+    # add -u before -z if TARGET PROTOCOL is UDP
+    EXIT_CODE=$?
+    SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
 
-DNS WARNING (CRITICAL):
-- NEVER use hostnames like http://checkoutservice:80
-- ALWAYS resolve the ClusterIP first and use the IP directly
-- Reason: egress policies may block DNS (port 53 UDP) causing hostname
-  resolution to fail even when the actual connection would be allowed
+- ncat  (raw TCP/UDP connect check, any port):
+    kubectl exec -n $SOURCE_NS $SOURCE_POD -- ncat -z -w 3 $SVC_IP $SVC_PORT >/dev/null 2>&1
+    # add -u before -z if TARGET PROTOCOL is UDP
+    EXIT_CODE=$?
+    SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
 
-TEST METHOD BY TOOL AND PORT
+- telnet (raw TCP connect check, TCP only):
+    OUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- sh -c "echo | timeout 3 telnet $SVC_IP $SVC_PORT" 2>&1)
+    SUCCESS_COND=$( echo "$OUT" | grep -qi "Connected" && echo 1 || echo 0 )
 
-WITH CURL (only for HTTP ports 80, 8080):
-  SVC_IP=$(kubectl get svc <service> -o jsonpath='{.spec.clusterIP}')
-  SVC_PORT=$(kubectl get svc <service> -o jsonpath='{.spec.ports[0].port}')
-  HTTP_CODE=$(kubectl exec $SOURCE_POD -- curl --max-time 3 -s -o /dev/null \
-    -w "%{http_code}" http://$SVC_IP:$SVC_PORT 2>/dev/null)
-  EXIT_CODE=$?
-  ALLOW check: EXIT_CODE == 0 AND HTTP_CODE != "000" → SUCCESS
-  DENY  check: EXIT_CODE != 0 OR  HTTP_CODE == "000" → SUCCESS
+- openssl (raw TCP connect check, TCP only):
+    OUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- sh -c "timeout 3 openssl s_client -connect $SVC_IP:$SVC_PORT </dev/null" 2>&1)
+    SUCCESS_COND=$( echo "$OUT" | grep -qi "CONNECTED" && echo 1 || echo 0 )
 
-WITH NC (for any port, mandatory for non-HTTP):
-  SVC_IP=$(kubectl get svc <service> -o jsonpath='{.spec.clusterIP}')
-  SVC_PORT=$(kubectl get svc <service> -o jsonpath='{.spec.ports[0].port}')
-  kubectl exec $SOURCE_POD -- nc -zw3 $SVC_IP $SVC_PORT >/dev/null 2>&1
-  EXIT_CODE=$?
-  ALLOW check: EXIT_CODE == 0 → SUCCESS
-  DENY  check: EXIT_CODE != 0 → SUCCESS
+- devtcp (raw TCP connect check, TCP only, REQUIRES bash — NEVER use sh):
+    kubectl exec -n $SOURCE_NS $SOURCE_POD -- bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" >/dev/null 2>&1
+    EXIT_CODE=$?
+    SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
 
-WITH /dev/tcp (fallback when nc not available):
-  SVC_IP=$(kubectl get svc <service> -o jsonpath='{.spec.clusterIP}')
-  SVC_PORT=$(kubectl get svc <service> -o jsonpath='{.spec.ports[0].port}')
-  kubectl exec $SOURCE_POD -- bash -c \
-    "echo > /dev/tcp/$SVC_IP/$SVC_PORT" >/dev/null 2>&1
-  EXIT_CODE=$?
-  ALLOW check: EXIT_CODE == 0 → SUCCESS
-  DENY  check: EXIT_CODE != 0 → SUCCESS
-
-SCRIPT STRUCTURE (follow exactly)
+SCRIPT STRUCTURE:
 #!/bin/bash
 set -uo pipefail
 
-SOURCE_POD=$(kubectl get pods -l app=<source> -o jsonpath='{.items[0].metadata.name}')
+SOURCE_NS="<SOURCE POD NAMESPACE from input>"
+TARGET_NS="<TARGET SERVICE NAMESPACE from input>"
 
-kubectl get svc <allowed-service> >/dev/null 2>&1 || { echo "SKIP: <allowed-service> not found"; exit 0; }
-ALLOWED_SVC_IP=$(kubectl get svc <allowed-service> -o jsonpath='{.spec.clusterIP}')
-ALLOWED_SVC_PORT=$(kubectl get svc <allowed-service> -o jsonpath='{.spec.ports[0].port}')
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=<SOURCE_APP> -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
 
-kubectl get svc <blocked-service> >/dev/null 2>&1 || { echo "SKIP: <blocked-service> not found"; exit 0; }
-BLOCKED_SVC_IP=$(kubectl get svc <blocked-service> -o jsonpath='{.spec.clusterIP}')
-BLOCKED_SVC_PORT=$(kubectl get svc <blocked-service> -o jsonpath='{.spec.ports[0].port}')
+kubectl get svc <TARGET_SVC> -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc <TARGET_SVC> -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc <TARGET_SVC> -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
 
-echo "=== ALLOWED CONNECTIONS ==="
+echo "=== TEST START ==="
 RESULT=0
 for i in 1 2 3 4 5; do
-  # Use nc for non-HTTP ports, curl for HTTP ports
-  <test command using $ALLOWED_SVC_IP and $ALLOWED_SVC_PORT>
-  if [ <success condition> ]; then
-    echo "SUCCESS: <source> -> <allowed-service>:$ALLOWED_SVC_PORT is allowed"
+  # <insert here the ONE check block matching TOOL TO USE, setting SUCCESS_COND>
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
     RESULT=1
     break
   fi
   sleep 2
 done
-if [ $RESULT -eq 0 ]; then
-  echo "FAIL: <source> -> <allowed-service>:$ALLOWED_SVC_PORT should be allowed but is blocked"
-fi
+if [ $RESULT -eq 0 ]; then echo "FAIL: Connection did not behave as expected."; exit 1; fi
+exit 0
 
-echo "=== BLOCKED CONNECTIONS ==="
-RESULT=0
-for i in 1 2 3 4 5; do
-  <test command using $BLOCKED_SVC_IP and $BLOCKED_SVC_PORT>
-  if [ <success condition> ]; then
-    echo "SUCCESS: <source> -> <blocked-service>:$BLOCKED_SVC_PORT is blocked"
-    RESULT=1
-    break
-  fi
-  sleep 2
-done
-if [ $RESULT -eq 0 ]; then
-  echo "FAIL: <source> -> <blocked-service>:$BLOCKED_SVC_PORT should be blocked but is allowed"
-fi
-
-BLOCKED SERVICE SELECTION:
-- The user will explicitly provide SOURCE POD and may provide ALLOWED SERVICE
-  and BLOCKED SERVICE
-- Use EXACTLY those names — NEVER invent or discover services dynamically
-- NEVER use kubectl get svc with label selectors to find services
-- NEVER use grep, awk, or head to parse service lists
-- If BLOCKED SERVICE is empty → omit the BLOCKED CONNECTIONS section entirely
-
-INTENT TYPE HANDLING:
-- If intent is BLOCK type: only test that the specified connections are blocked
-- If intent is ALLOW type: test that allowed connections work AND optionally
-  that unrelated connections behave as expected
-
-CRITICAL ANTI-LOOP RULE:
-- If a service (allowed or blocked) is NOT provided, DO NOT try to infer it
-- DO NOT reason about missing services
-- Simply skip that section
-- NEVER attempt to figure out missing inputs
-
-SERVICE NOT FOUND HANDLING:
-Before using any service, verify it exists:
-  kubectl get svc <service> >/dev/null 2>&1 || { echo "SKIP: <service> not found"; exit 0; }
-
-FAIL FALLBACK (MANDATORY):
-After each loop, if no SUCCESS was printed → print FAIL.
-Always use the RESULT variable pattern:
-
-  RESULT=0
-  for i in 1 2 3 4 5; do
-    <test command>
-    if [ <success condition> ]; then
-      echo "SUCCESS: ..."
-      RESULT=1
-      break
-    fi
-    sleep 2
-  done
-  if [ $RESULT -eq 0 ]; then
-    echo "FAIL: ..."
-  fi
-
-DO NOT THINK.
-DO NOT EXPLAIN.
-OUTPUT ONLY THE FINAL SCRIPT.
-NO <think> blocks.
+BLOCKED CONNECTION TEST (only for DENY intents): invert SUCCESS_COND logic above.
 """
 
 GROQ_MODEL = None
@@ -677,6 +619,7 @@ def get_args():
     parser = argparse.ArgumentParser(description="Run a Flask server for text generation using Groq API.")
     parser.add_argument("--model", type=str, required=True, help="Groq model ID to use.")
     parser.add_argument("--port", type=int, required=True, help="Port for the Flask server.")
+    parser.add_argument("--test-namespace", type=str, default="default", help="Namespace for test pods and policies")
     return parser.parse_args()
 
 request_queue = queue.Queue(maxsize=50)
@@ -840,7 +783,9 @@ def node_validate(state: PolicyState, client) -> PolicyState:
         timeout=LLM_TIMEOUT_SECONDS,
     )
     raw = extract_yaml(completion.choices[0].message.content.strip())
-    print(f"Generated text: {raw}")
+    #print(f"Generated text: {raw}")
+    if not raw:  
+        raise ValueError("LLM returned empty YAML")
 
     if raw.upper().startswith("VALID"):
         return {
@@ -952,43 +897,92 @@ def node_generate(state: PolicyState, client) -> PolicyState:
         "iterations": state["iterations"] + 1
     }
 
+def select_tool(tools: list) -> str:
+    if "nc" in tools:
+        return "nc"
+    if "ncat" in tools:
+        return "ncat"
+    if "bash" in tools:
+        return "devtcp"
+    if "wget" in tools:
+        return "wget"
+    if "curl" in tools:
+        return "curl"
+    if "openssl" in tools:
+        return "openssl"
+    if "telnet" in tools:
+        return "telnet"
+    return "none"
+
+def get_pod_namespace(pod_discovery: list, app_label: str, preferred_ns: str = "default") -> str:
+    # Prima cerca nel namespace preferito
+    for pod in pod_discovery:
+        if (pod.get("labels", {}).get("app") == app_label and
+            pod.get("namespace") == preferred_ns):
+            return preferred_ns
+    # Fallback: qualsiasi namespace
+    for pod in pod_discovery:
+        if pod.get("labels", {}).get("app") == app_label:
+            return pod.get("namespace", "default")
+    return "default"
+
+def get_source_tools(pod_discovery: list, source_app: str, preferred_ns: str = "default") -> list:
+    # Prima cerca nel namespace preferito
+    for pod in pod_discovery:
+        if (pod.get("labels", {}).get("app") == source_app and
+            pod.get("namespace") == preferred_ns):
+            return pod.get("availableTools", [])
+    # Fallback: qualsiasi namespace
+    for pod in pod_discovery:
+        if pod.get("labels", {}).get("app") == source_app:
+            return pod.get("availableTools", [])
+    return []
 
 def node_testing(state: PolicyState, client) -> PolicyState:
-    # Usa le info di discovery passate dal controller
     discovery_context = format_pod_discovery(state.get("pod_discovery", []))
-    try:
-      completion = ollama_client.chat(
-          model="qwen3-coder-next",
-          messages=[
-              {"role": "system", "content": TEST_GENERATOR_PROMPT},
-              {
-                  "role": "user",
-                  "content": (
-                      f"INTENT:\n{state['technical_prompt']}\n\n"
-                      f"CLUSTER POD INFO (ports, protocols, available tools):\n"
-                      f"{discovery_context}\n"
-                  )
-              }
-          ],
-          options={
-              "temperature": 0.1,
-              "num_predict": 4096,
-          }
-      )
-    except Exception as e:
-        print(f"[node_generate] ERROR: {e}", flush=True)  # <-- aggiungi questo
-        raise
+
+    match = re.search(r'app == "([\w-]+)"', state["technical_prompt"])
+    source_app = match.group(1) if match else "unknown"
+    source_ns = get_pod_namespace(state.get("pod_discovery", []), source_app, TEST_NAMESPACE)
+
+    matches = re.findall(r'app == "([\w-]+)"', state["technical_prompt"])
+    target_app = matches[1] if len(matches) > 1 else "unknown"
+    target_ns = get_pod_namespace(state.get("pod_discovery", []), target_app, TEST_NAMESPACE)
+
+    tools = get_source_tools(state.get("pod_discovery", []), source_app, TEST_NAMESPACE)
+    tool = select_tool(tools)
+
+    print(f"[node_testing] source_app={source_app} ns={source_ns}, "
+          f"target_app={target_app} ns={target_ns}, "
+          f"tools={tools}, selected_tool={tool}", flush=True)
+    
+    print(f"[DEBUG] pods in discovery: {[(p.get('labels',{}).get('app'), p.get('namespace')) for p in state.get('pod_discovery',[])][:10]}", flush=True)
+
+    completion = ollama_client.chat(
+        model="qwen3-coder-next",
+        messages=[
+            {"role": "system", "content": TEST_GENERATOR_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"INTENT:\n{state['technical_prompt']}\n\n"
+                    f"CLUSTER POD INFO:\n{discovery_context}\n\n"
+                    f"SOURCE POD APP LABEL: {source_app}\n"
+                    f"SOURCE POD NAMESPACE: {source_ns}\n"
+                    f"TARGET SERVICE NAME: {target_app}\n"
+                    f"TARGET SERVICE NAMESPACE: {target_ns}\n"
+                    f"AVAILABLE TOOLS IN SOURCE POD: {', '.join(tools) if tools else 'none'}\n"
+                    f"TOOL TO USE: {tool}\n"
+                    f"DO NOT use any other tool. If tool is 'none', print SKIP and exit 0.\n"
+                )
+            }
+        ],
+        options={"temperature": 0.1, "num_predict": 4096}
+    )
 
     raw = completion['message']['content'].strip()
     script = extract_script(raw)
-
-    return {
-        **state,
-        "test_script": script,
-        "testing_done": True
-    }
-
-
+    return {**state, "test_script": script, "testing_done": True}
 
 def node_join(state: PolicyState) -> PolicyState:
     return state
@@ -1046,14 +1040,13 @@ def generate():
     data = request.get_json()
     if not data or 'prompt' not in data:
         return jsonify({"error": "Invalid request, missing 'prompt' field"}), 400
-    
     pod_discovery = data.get('pod_discovery', [])
-    
     try:
         result = generate_text(data['prompt'], pod_discovery)
         return jsonify(result), 200
     except Exception as e:
-        print(f"Error: {str(e)}", flush=True)
+        import traceback
+        print(f"Error: {traceback.format_exc()}", flush=True)  # ← traceback completo
         return jsonify({"error": str(e)}), 500
 
 @app.route('/health', methods=['GET'])
@@ -1089,6 +1082,7 @@ signal.signal(signal.SIGINT, shutdown_handler)
 if __name__ == "__main__":
     args = get_args()
     GROQ_MODEL = args.model
+    TEST_NAMESPACE = args.test_namespace
     print(f"Starting Flask server with Groq API backend...")
     print(f"Make sure GROQ_API_KEY and OLLAMA_API_KEY environment variable is set")
     print(f"Using Groq model: {GROQ_MODEL}")

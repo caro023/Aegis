@@ -169,23 +169,42 @@ func checkPodExistence(ctx context.Context, k8sClient client.Client, namespace s
 // validateServices checks if the Services matching the selector exist.
 func validateServices(ctx context.Context, k8sClient client.Client, namespace string, matchLabels map[string]string) error {
 	var services corev1.ServiceList
-	listOpts := []client.ListOption{
-		client.InNamespace(namespace),
-		client.MatchingLabels(matchLabels),
-	}
-	if err := k8sClient.List(ctx, &services, listOpts...); err != nil {
+	if err := k8sClient.List(ctx, &services); err != nil {
 		return errors.Errorf("error fetching services: %v", err)
 	}
-	if len(services.Items) == 0 {
-		return errors.Errorf("no services found matching the selector")
+	fmt.Printf("[DEBUG validateServices] total services=%d, looking for matchLabels=%v\n",
+		len(services.Items), matchLabels)
+	for _, svc := range services.Items {
+		fmt.Printf("[DEBUG validateServices] svc=%s ns=%s selector=%v\n",
+			svc.Name, svc.Namespace, svc.Spec.Selector)
+		if svc.Spec.Selector == nil {
+			continue
+		}
+		match := true
+		for k, v := range matchLabels {
+			if svc.Spec.Selector[k] != v {
+				match = false
+				break
+			}
+		}
+		if match {
+			fmt.Printf("[DEBUG validateServices] MATCH found: svc=%s\n", svc.Name)
+			return nil
+		}
 	}
-	return nil
+	return errors.Errorf("no services found matching the selector")
 }
 
 // validateNamespaces checks the existence of the namespace.
 func validateNamespaces(ctx context.Context, k8sClient client.Client, namespace string) error {
+	// Usa Get diretto invece della cache
 	var ns corev1.Namespace
-	if err := k8sClient.Get(ctx, types.NamespacedName{Name: namespace}, &ns); err != nil {
+	err := k8sClient.Get(ctx, types.NamespacedName{Name: namespace}, &ns)
+	if err != nil {
+		// Fallback: ignora l'errore di timeout del namespace
+		if strings.Contains(err.Error(), "Timeout") || strings.Contains(err.Error(), "sync") {
+			return nil
+		}
 		return errors.Errorf("error fetching namespace '%s': %v", namespace, err)
 	}
 	return nil

@@ -94,14 +94,14 @@ func (q *IntentQueue) Pop() (string, bool) {
 }
 
 type PodDiscoveryInfo struct {
-	Name           string
-	Namespace      string
-	Ports          []PortInfo
-	Labels         map[string]string
-	AvailableTools []string // es. curl, wget, nc, nmap
+	Name           string            `json:"name"`
+	Namespace      string            `json:"namespace"`
+	Ports          []PortInfo        `json:"ports"`
+	Labels         map[string]string `json:"labels"`
+	AvailableTools []string          `json:"availableTools"`
 }
 
 type PortInfo struct {
-	Port     int32
-	Protocol string // TCP, UDP, SCTP
+	Port     int32  `json:"port"`
+	Protocol string `json:"protocol"`
 }

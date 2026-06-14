@@ -33,6 +33,7 @@ import (
 	"github.com/cclab-inu/KubeTeus/pkg/validator"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -60,10 +61,11 @@ type KubeTeusReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	Model  string
-	Mode   string
-	Intent *string
-	Queue  *utils.IntentQueue
+	Model         string
+	Mode          string
+	Intent        *string
+	Queue         *utils.IntentQueue
+	TestNamespace string
 
 	startTime    time.Time
 	HTTPClient   *http.Client
@@ -122,11 +124,10 @@ func (r *KubeTeusReconciler) processIntent(ctx context.Context, intent string) {
 		logger.Info("Pod info cache not ready yet, discovering now...")
 		discovered, err := r.discoverPodInfo(ctx)
 		if err == nil {
-			r.podInfoCache = discovered  
+			r.podInfoCache = discovered
 			podInfoList = discovered
 		}
 	}
-
 
 	cniType, err := detectCNIPlugin(ctx, r.Client)
 	if err != nil {
@@ -137,12 +138,15 @@ func (r *KubeTeusReconciler) processIntent(ctx context.Context, intent string) {
 	var finalPrompt string
 	switch cniType {
 	case "cilium":
-		finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a CiliumNetworkPolicy.", intent, servicesContext)
+		finalPrompt = fmt.Sprintf("%s\n%s\nNamespace: %s\nGenerate a CiliumNetworkPolicy in namespace %s.",
+			intent, servicesContext, r.TestNamespace, r.TestNamespace)
 	case "calico":
 		apiVersion := detectCalicoAPIVersion(ctx, r.Client)
-		finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a CalicoNetworkPolicy with apiVersion: %s.", intent, servicesContext, apiVersion)
+		finalPrompt = fmt.Sprintf("%s\n%s\nNamespace: %s\nGenerate a CalicoNetworkPolicy with apiVersion: %s in namespace %s.",
+			intent, servicesContext, r.TestNamespace, apiVersion, r.TestNamespace)
 	default:
-		finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a Kubernetes NetworkPolicy.", intent, servicesContext)
+		finalPrompt = fmt.Sprintf("%s\n%s\nNamespace: %s\nGenerate a Kubernetes NetworkPolicy in namespace %s.",
+			intent, servicesContext, r.TestNamespace, r.TestNamespace)
 	}
 
 	var prompts utils.Prompt
@@ -177,7 +181,8 @@ func (r *KubeTeusReconciler) processIntent(ctx context.Context, intent string) {
 		return
 	}
 	if len(validationErrors) > 0 {
-		logger.Error(fmt.Errorf("validation failed"), "errors", validationErrors)
+		errStr := fmt.Sprintf("%v", validationErrors)
+		logger.Error(fmt.Errorf("policy validation failed"), "Invalid configurations detected", "Errors", errStr)
 		return
 	}
 
@@ -241,7 +246,7 @@ func (r *KubeTeusReconciler) discoverPodInfo(ctx context.Context) ([]utils.PodDi
 		// Scopri tool disponibili eseguendo un comando nel pod
 		tools := r.detectAvailableTools(ctx, pod)
 		info.AvailableTools = tools
-		fmt.Printf("Pod %s tools: %v\n", pod.Name, tools)
+		//fmt.Printf("Pod %s tools: %v\n", pod.Name, tools)
 
 		result = append(result, info)
 	}
@@ -251,7 +256,7 @@ func (r *KubeTeusReconciler) discoverPodInfo(ctx context.Context) ([]utils.PodDi
 
 // detectAvailableTools prova a eseguire 'which <tool>' nel primo container del pod.
 func (r *KubeTeusReconciler) detectAvailableTools(ctx context.Context, pod v1.Pod) []string {
-	candidates := []string{"curl", "wget", "nc", "ncat", "nmap", "ping", "telnet", "openssl"}
+	candidates := []string{"curl", "wget", "nc", "ncat", "nmap", "ping", "telnet", "openssl", "bash", "sh"}
 	var found []string
 
 	if len(pod.Spec.Containers) == 0 {
@@ -506,24 +511,42 @@ func (r *KubeTeusReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func detectCNIPlugin(ctx context.Context, k8sClient client.Client) (string, error) {
-	podList := &v1.PodList{}
-	if err := k8sClient.List(ctx, podList, client.InNamespace("kube-system")); err != nil {
-		return "", err
-	}
-
-	for _, pod := range podList.Items {
-		name := strings.ToLower(pod.Name)
-		switch {
-		case strings.Contains(name, "cilium"):
-			return "cilium", nil
-		case strings.Contains(name, "calico"):
-			return "calico", nil
-		case strings.Contains(name, "antrea"):
-			return "antrea", nil
-		case strings.Contains(name, "weave"):
-			return "weave", nil
+	crdList := &apiextensionsv1.CustomResourceDefinitionList{}
+	if err := k8sClient.List(ctx, crdList); err == nil {
+		for _, crd := range crdList.Items {
+			name := strings.ToLower(crd.Name)
+			if strings.Contains(name, "cilium.io") {
+				fmt.Printf("[DEBUG detectCNI] Found Cilium CRD: %s\n", crd.Name)
+				return "cilium", nil
+			}
+			if strings.Contains(name, "projectcalico.org") ||
+				strings.Contains(name, "crd.projectcalico.org") {
+				fmt.Printf("[DEBUG detectCNI] Found Calico CRD: %s\n", crd.Name)
+				return "calico", nil
+			}
 		}
 	}
+
+	podList := &v1.PodList{}
+	if err := k8sClient.List(ctx, podList); err != nil {
+		return "", err
+	}
+	for _, pod := range podList.Items {
+		name := strings.ToLower(pod.Name)
+		ns := pod.Namespace
+		switch {
+		case strings.Contains(name, "cilium"):
+			fmt.Printf("[DEBUG detectCNI] Found Cilium pod: %s ns=%s\n", pod.Name, ns)
+			return "cilium", nil
+		case strings.Contains(name, "calico") ||
+			ns == "calico-system" ||
+			ns == "tigera-operator":
+			fmt.Printf("[DEBUG detectCNI] Found Calico pod: %s ns=%s\n", pod.Name, ns)
+			return "calico", nil
+		}
+	}
+
+	fmt.Printf("[DEBUG detectCNI] No CNI detected\n")
 	return "unknown", nil
 }
 

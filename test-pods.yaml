@@ -1,0 +1,200 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: test-pods
+---
+# --- 1) frontend: HTTP, alpine/busybox -> wget + nc available ---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: frontend
+  namespace: test-pods
+  labels:
+    app: frontend
+    tier: frontend
+    protocol: http
+spec:
+  containers:
+    - name: frontend
+      image: nginx:alpine
+      ports:
+        - containerPort: 80
+          protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: test-pods
+spec:
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+---
+# --- 2) api-backend: HTTP, debian-slim -> NO curl/wget/nc, but bash present -> /dev/tcp works ---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: api-backend
+  namespace: test-pods
+  labels:
+    app: api-backend
+    tier: backend
+    protocol: http
+spec:
+  containers:
+    - name: api-backend
+      image: python:3.12-slim
+      command: ["python3", "-m", "http.server", "8000"]
+      ports:
+        - containerPort: 8000
+          protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-backend
+  namespace: test-pods
+spec:
+  selector:
+    app: api-backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+---
+# --- 3) cache: TCP (redis-like), alpine -> nc available ---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cache
+  namespace: test-pods
+  labels:
+    app: cache
+    tier: cache
+    protocol: tcp
+spec:
+  containers:
+    - name: cache
+      image: redis:7-alpine
+      ports:
+        - containerPort: 6379
+          protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cache
+  namespace: test-pods
+spec:
+  selector:
+    app: cache
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+---
+# --- 4) dns-worker: UDP, coredns -> no curl/wget/nc -> good edge case for SKIP on UDP ---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dns-worker
+  namespace: test-pods
+  labels:
+    app: dns-worker
+    tier: backend
+    protocol: udp
+spec:
+  containers:
+    - name: dns-worker
+      image: coredns/coredns:1.11.1
+      args: ["-conf", "/dev/null"]
+      ports:
+        - containerPort: 53
+          protocol: UDP
+        - containerPort: 53
+          protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-worker
+  namespace: test-pods
+spec:
+  selector:
+    app: dns-worker
+  ports:
+    - name: dns-udp
+      port: 53
+      targetPort: 53
+      protocol: UDP
+    - name: dns-tcp
+      port: 53
+      targetPort: 53
+      protocol: TCP
+---
+# --- 5) grpc-service: TCP, distroless -> NO tools, NO bash -> devtcp script won't run (rollback path) ---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: grpc-service
+  namespace: test-pods
+  labels:
+    app: grpc-service
+    tier: backend
+    protocol: grpc
+spec:
+  containers:
+    - name: grpc-service
+      image: registry.k8s.io/pause:3.9
+      ports:
+        - containerPort: 50051
+          protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpc-service
+  namespace: test-pods
+spec:
+  selector:
+    app: grpc-service
+  ports:
+    - port: 50051
+      targetPort: 50051
+      protocol: TCP
+---
+# --- 6) toolbox: TCP (mqtt-like), netshoot -> curl, wget, nc, ncat, nmap, ping, telnet, openssl all available ---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: toolbox
+  namespace: test-pods
+  labels:
+    app: toolbox
+    tier: legacy
+    protocol: tcp
+spec:
+  containers:
+    - name: toolbox
+      image: nicolaka/netshoot:latest
+      command: ["sleep", "infinity"]
+      ports:
+        - containerPort: 1883
+          protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: toolbox
+  namespace: test-pods
+spec:
+  selector:
+    app: toolbox
+  ports:
+    - port: 1883
+      targetPort: 1883
+      protocol: TCP

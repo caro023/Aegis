@@ -4,6 +4,7 @@ IMG ?= controller:latest
 # Default model variable
 MODEL ?= default
 MODE ?= user
+TEST_NAMESPACE ?= default
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -107,10 +108,10 @@ ui: ## Run the UI for capturing user intents.
 run: manifests generate fmt vet ## Run a controller from your host.
 ifeq ($(MODE),user)
 	@echo "Starting Operator in user mode..."
-	go run ./cmd/main.go --model=$(MODEL) --mode=$(MODE)
+	go run ./cmd/main.go --model=$(MODEL) --mode=$(MODE) --test-namespace=$(TEST_NAMESPACE)
 else
 	@echo "Starting Operator in default mode..."
-	go run ./cmd/main.go --model=$(MODEL) --mode=$(MODE)
+	go run ./cmd/main.go --model=$(MODEL) --mode=$(MODE) --test-namespace=$(TEST_NAMESPACE)
 endif
 
 .PHONY: finetune

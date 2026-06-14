@@ -18,7 +18,7 @@ func PolicyGenerator(ctx context.Context, k8sClient client.Client, model string,
 	logger := log.FromContext(ctx)
 	models := utils.SelectModel(model)
 	if len(prompts.Network) > 0 {
-		networkPolicies, testScript, err := generatePolicy(ctx, prompts.Network, "http://localhost:5000/generate", models.Network)
+		networkPolicies, testScript, err := generatePolicy(ctx, prompts.Network, "http://localhost:5000/generate", models.Network, prompts.PodDiscovery)
 		if err == nil {
 			policy.Network = networkPolicies
 			policy.TestScript = testScript
@@ -29,18 +29,19 @@ func PolicyGenerator(ctx context.Context, k8sClient client.Client, model string,
 	return policy, nil
 }
 
-func generatePolicy(ctx context.Context, prompts []string, url string, model string) ([]string, string, error) {
+func generatePolicy(ctx context.Context, prompts []string, url string, model string, podDiscovery []utils.PodDiscoveryInfo) ([]string, string, error) {
 	logger := log.FromContext(ctx)
 	var results []string
 	var testScript string
 
 	for _, prompt := range prompts {
-		body, err := json.Marshal(map[string]string{
-			"model":  model,
-			"prompt": prompt,
+		body, err := json.Marshal(map[string]interface{}{
+			"model":         model,
+			"prompt":        prompt,
+			"pod_discovery": podDiscovery,
 		})
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to marshal request: %v", err) // ← tre valori
+			return nil, "", fmt.Errorf("failed to marshal request: %v", err)
 		}
 
 		resp, err := http.Post(url, "application/json", bytes.NewBuffer(body))
