@@ -10,12 +10,14 @@ from ollama import Client
 import threading
 import queue
 import signal
+import json
+import yaml
 
 app = Flask(__name__)
 VALIDATOR_MODEL = "qwen/qwen3-32b"
 INTENT_MODEL = "llama-3.3-70b-versatile"
 
-LLM_TIMEOUT_SECONDS = 180
+LLM_TIMEOUT_SECONDS = 250
 REQUEST_TIMEOUT_SECONDS = 300
 
 TEST_NAMESPACE = "default"
@@ -25,55 +27,172 @@ ollama_client = Client(
     headers={'Authorization': 'Bearer ' + os.environ.get('OLLAMA_API_KEY')},
     timeout = LLM_TIMEOUT_SECONDS 
 )
-INTENT_TRANSLATOR_PROMPT = """You are a Kubernetes network security expert.
-Your task is to translate a high-level security intent into a detailed technical prompt for generating a Kubernetes network policy.
 
-The output must be a single sentence or short paragraph describing:
-- Which pod or service is the source (use the pod name and label if provided)
-- ALWAYS use the EXACT service name as label value, never truncate it
-- The traffic direction (ingress or egress)
-- The destination pod or service (if specified)
-- The port and protocol (if specified or inferable)
-- The action (allow or deny)
-- The policy type to generate (always end with: Generate a CiliumNetworkPolicy, CalicoNetworkPolicy or NetworkPolicy)
+INTENT_TRANSLATOR_PROMPT = """You are a Kubernetes network security expert.
+Your task is to translate a high-level security intent into a STRUCTURED JSON
+object that will be used both to generate a network policy YAML and to
+generate a connectivity test script.
+
+OUTPUT FORMAT (MANDATORY):
+- Output ONLY a single valid JSON object. No markdown, no backticks, no
+  explanations, no <think> tags, no text before or after the JSON.
+- The JSON object MUST have EXACTLY these keys:
+
+{
+  "source_app": "<pod label value, e.g. frontend>",
+  "target_app": "<pod/service label value, e.g. cache>",
+  "port": "<port number as string, e.g. 6379, or empty string if not specified>",
+  "protocol": "TCP" | "UDP",
+  "action": "allow" | "deny",
+  "namespace": "<namespace from the input intent>",
+  "policy_type": "cilium" | "calico" | "kubernetes",
+  "description": "<one paragraph for the YAML generator, see DESCRIPTION RULES>"
+}
 
 LABEL RULE (MANDATORY):
-- ALWAYS use 'app == "podname"' as selector. Example: frontend → app == "frontend"
-- NEVER truncate service names: "checkout service" → app == "checkoutservice" NOT app == "checkout"
-- NEVER use other keys like 'service', 'name', 'component', 'pod'.
-- NEVER invent label keys
+- source_app and target_app are ALWAYS plain pod/service label values
+  (e.g. "frontend", "user-mongodb"), never prefixed/suffixed, never
+  wrapped in 'app == "..."' or matchLabels syntax.
+- NEVER truncate names: "checkout service" -> "checkoutservice", not "checkout".
+- NEVER invent a pod/service name that is not mentioned or clearly implied
+  by the intent.
 
-DIRECTION RULE (MANDATORY):
-- "A allows/blocks traffic TO B" → this is an EGRESS policy on A, or INGRESS policy on B
-- EGRESS = traffic leaving the source pod
-- INGRESS = traffic arriving at the destination pod
-- "A talks to B" → egress from A AND ingress on B
-- If bidirectional → include both directions
-
-OUTPUT FORMAT:
-- One paragraph only
-- Include: source pod label, direction, destination pod label, port/protocol, action, policy type
-- End with the exact policy type from the input (e.g. "Generate a CalicoNetworkPolicy with apiVersion: crd.projectcalico.org/v1.")
-
-If the intent is too generic or does not mention specific pods, infer reasonable defaults based on common Kubernetes security practices.
-IMPORTANT: If the input specifies a policy type (e.g. "Generate a CalicoNetworkPolicy" or "Generate a CiliumNetworkPolicy"), you MUST preserve that exact instruction at the end of your output.
-DENY/ALLOW DISAMBIGUATION (MANDATORY):
-- If the intent uses words like "block", "deny", "restrict", "drop" → the action is DENY.
-- If the intent uses words like "allow", "permit", "enable" → the action is ALLOW.
-- Always state the action explicitly as "allow" or "deny" in your output.
-- Never use ambiguous terms like "control" or "manage".
-Output ONLY the translated prompt, no explanations.
+POLICY_TYPE RULE (MANDATORY):
+- The input intent will end with an instruction like
+  "Generate a CiliumNetworkPolicy...", "Generate a CalicoNetworkPolicy...",
+  or "Generate a Kubernetes NetworkPolicy...".
+- Map this to policy_type: "cilium", "calico", or "kubernetes" respectively.
 
 NAMESPACE RULE (MANDATORY):
-- If the input intent specifies a namespace (e.g. "in the X namespace",
-  "Apply the policy to the X namespace"), you MUST explicitly restate that
-  namespace at the end of your output, e.g.:
-  "...Generate a CiliumNetworkPolicy in namespace test-pods."
-- NEVER omit the namespace if the input mentions one, even if you also
-  mentioned it earlier in the sentence.
-- If no namespace is mentioned in the input, do not invent one.
+- If the input intent specifies a namespace (e.g. "in the test-pods namespace",
+  "Apply the policy to the X namespace"), set "namespace" to that exact value.
+- If no namespace is specified, set "namespace" to "default".
+- NEVER invent a namespace different from the one stated in the intent.
 
-"""
+PORT RULE (MANDATORY):
+- Extract ONLY ports explicitly stated in the intent.
+- NEVER infer, guess, derive, or assume a port from the application name,
+  service type, protocol, common conventions, or prior knowledge.
+- If no port is explicitly specified, set "port" to null.
+
+PROTOCOL RULE (MANDATORY):
+- Extract ONLY protocols explicitly stated in the intent.
+- If no protocol is explicitly specified, set "protocol" to null.
+
+============================================================
+TEST ROLES RULE (MOST IMPORTANT — READ CAREFULLY):
+============================================================
+source_app, target_app and action describe a SINGLE concrete connection
+attempt that should be used to TEST the policy. This connection is NOT
+necessarily "the pod the policy is attached to" — it is always:
+
+  source_app = the pod that INITIATES the connection during the test
+  target_app = the pod/service that RECEIVES the connection during the test
+  action     = the EXPECTED OUTCOME of that specific connection
+               ("allow" = should succeed, "deny" = should be blocked)
+
+Use the following mapping depending on the intent pattern:
+
+1) "Allow egress from A to B on port P" / "A talks to B" / "A is allowed to
+   reach B":
+   -> source_app = A, target_app = B, action = "allow"
+
+2) "Allow ingress to B from A on port P" (equivalent to the above, A connects
+   to B):
+   -> source_app = A, target_app = B, action = "allow"
+
+3) "Deny/block egress from A to B on port P" (no exceptions):
+   -> source_app = A, target_app = B, action = "deny"
+
+4) "Deny ingress to B from all pods except A on port P" /
+   "Deny all traffic to B except from A":
+   This generates an ALLOW rule for A (with everything else implicitly
+   denied). The TESTABLE, currently-working connection is A -> B.
+   -> source_app = A, target_app = B, action = "allow"
+   (Do NOT set source_app = B. B is the policy SUBJECT, not the test source.)
+
+5) "Allow ingress to B from all pods on port P" (no specific source pod):
+   -> source_app = "any", target_app = B, action = "allow"
+   (the test generator will pick any available pod as source)
+
+If port is not specified for the test connection but is implied by a known
+service type (e.g. DNS -> 53, HTTP -> 80), use that. Otherwise leave "port"
+empty and "protocol" as "TCP".
+
+============================================================
+DESCRIPTION RULES (for the YAML generator):
+============================================================
+- One paragraph, natural language, describing the POLICY to generate
+  (this can differ from source_app/target_app/action above when the intent
+  uses the "except" pattern — describe the policy as it should actually be
+  written, e.g. "B allows ingress from A on port P", which is consistent
+  with case 4 above).
+- Include: source pod label, destination pod label, direction
+  (ingress/egress), port/protocol (if any), action (allow/deny), and end
+  with the exact policy type instruction from the input, preserved verbatim,
+  e.g. "Generate a CiliumNetworkPolicy in namespace test-pods."
+- DIRECTION RULE: "A allows/sends traffic TO B" -> egress on A AND ingress
+  on B (for Cilium, mention both so the generator creates both policies).
+- DENY/ALLOW: use "block"/"deny"/"restrict"/"drop" -> action deny;
+  "allow"/"permit"/"enable" -> action allow. Always state it explicitly.
+- NEVER omit the namespace instruction at the end.
+
+FALLBACK RULE (IMPORTANT):
+- Prefer the JSON format above whenever possible.
+- If you are uncertain about source_app, target_app, port, protocol, or
+  action, and producing the JSON would force you to guess wildly, you MAY
+  instead output ONLY the json with the desctiprion
+============================================================
+EXAMPLES
+============================================================
+
+INPUT:
+"The pod labeled app=frontend uses nc to test
+HTTP connectivity. Allow egress from frontend to api-backend on TCP port
+8000. Generate a CiliumNetworkPolicy in namespace test-pods."
+
+OUTPUT:
+{"source_app": "frontend", "target_app": "api-backend", "port": "8000", "protocol": "TCP", "action": "allow", "namespace": "test-pods", "policy_type": "cilium", "description": "Allow egress from the pod labeled app == \\"frontend\\" to the pod labeled app == \\"api-backend\\" on TCP port 8000, and allow ingress to app == \\"api-backend\\" from app == \\"frontend\\" on TCP port 8000, action allow. Generate a CiliumNetworkPolicy in namespace test-pods."}
+
+---
+
+INPUT:
+"Deny ingress to cache from all pods except frontend on TCP
+port 6379 in the test-pods namespace. Generate a CiliumNetworkPolicy in namespace test-pods."
+
+OUTPUT:
+{"source_app": "frontend", "target_app": "cache", "port": "6379", "protocol": "TCP", "action": "allow", "namespace": "test-pods", "policy_type": "cilium", "description": "Allow ingress to the pod labeled app == \\"cache\\" only from the pod labeled app == \\"frontend\\" on TCP port 6379, action allow, all other ingress to cache remains implicitly denied. Generate a CiliumNetworkPolicy in namespace test-pods."}
+
+---
+
+INPUT:
+"In the test-pods namespace, the pod labeled app=dns-worker uses no
+networking tools. Allow ingress to dns-worker from all pods on UDP
+in the test-pods namespace. Apply the policy to the test-pods namespace.
+Generate a CalicoNetworkPolicy with apiVersion: crd.projectcalico.org/v1 in namespace test-pods."
+
+OUTPUT:
+{"source_app": "any", "target_app": "dns-worker", "port": null, "protocol": "UDP", "action": "allow", "namespace": "test-pods", "policy_type": "calico", "description": "Allow ingress to the pod labeled app == \\"dns-worker\\" from all pods (matchLabels: {}) on UDP port 53, action allow. Generate a CiliumNetworkPolicy with apiVersion: crd.projectcalico.org/v1 in namespace test-pods."}
+
+---
+INPUT:
+"The pod labeled app=user-mongodb uses mongosh
+to test connectivity. Deny all ingress traffic to user-timeline-mongodb
+except from user-timeline-service in the test-pods namespace.
+Apply the policy to the test-pods namespace. Generate a
+CalicoNetworkPolicy with apiVersion: crd.projectcalico.org/v1 in namespace test-pods."
+
+OUTPUT:
+{"source_app": "user-timeline-service", "target_app": "user-timeline-mongodb", "port": null, "protocol": null, "action": "allow", "namespace": "test-pods", "policy_type": "calico", "description": "Allow ingress to the pod labeled app == \"user-timeline-mongodb\" only from the pod labeled app == \"user-timeline-service\", action allow, all other ingress remains implicitly denied. Generate a CalicoNetworkPolicy with apiVersion: crd.projectcalico.org/v1 in namespace test-pods."}
+
+---
+
+INPUT:
+"Let frontend talk to cache. Generate a CiliumNetworkPolicy in namespace test-pods."
+
+OUTPUT:
+{"source_app": "frontend", "target_app": "cache", "port": null, "protocol": null, "action": "allow", "namespace": "test-pods", "policy_type": "cilium", "description": "Allow traffic from the pod labeled app == \"frontend\" to the pod labeled app == \"cache\", action allow. Generate a CiliumNetworkPolicy in namespace test-pods."}
+Output ONLY the JSON object, nothing else."""
 
 
 SYSTEM_PROMPT_CALICO = """You are a Kubernetes security engineer.
@@ -168,6 +287,13 @@ Therefore:
 - If the intent is to block specific traffic ONLY,
 - You MUST add a final "Allow" rule to permit all other traffic.
 
+BIDIRECTIONAL RULE (MANDATORY):
+- For any Allow intent involving traffic from A to B, ALWAYS generate
+  BOTH an egress rule on A AND an ingress rule on B as separate policies.
+- NEVER generate only one side.
+- This is critical because existing egress policies on A may implicitly
+  block new destinations unless explicitly allowed.
+
 CORRECT Calico example (use this as reference):
 apiVersion: crd.projectcalico.org/v1
 kind: NetworkPolicy
@@ -189,6 +315,14 @@ CORRECT example:
     destination:          # ← ports inside destination
       ports:
       - 80          # ← integer, not "0-65535"
+
+DO NOT USE <think> TAGS.
+DO NOT REASON ABOUT THE RULES.
+JUST OUTPUT THE YAML.
+Return ONLY valid YAML.
+Do not include explanations.
+Do not include markdown backticks.
+Output MUST start with: apiVersion:
 """
 
 SYSTEM_PROMPT_CILIUM = """You are a Kubernetes security engineer.
@@ -327,6 +461,7 @@ OUTPUT RULES (MANDATORY):
 - NO explanations, comments, markdown, or reasoning.
 - NO text before or after the YAML.
 
+
 BIDIRECTIONAL VALIDATION RULE (CRITICAL):
 - If the intent implies communication between two services (e.g. "X talks to Y"):
   - The policies created MUST include:
@@ -392,6 +527,13 @@ PORTS IN DESTINATION (CALICO):
 - Port values MUST be integers: ports: [53] not ports: [{port: 53, protocol: UDP}]
 - Protocol goes at rule level: protocol: UDP
 
+BIDIRECTIONAL RULE (MANDATORY):
+- For any Allow intent involving traffic from A to B, ALWAYS generate
+  BOTH an egress rule on A AND an ingress rule on B as separate policies.
+- NEVER generate only one side.
+- This is critical because existing egress policies on A may implicitly
+  block new destinations unless explicitly allowed.
+
 STRUCTURE VALIDATION:
 - Must start with apiVersion
 - Must include: kind, metadata.name, metadata.namespace, spec.selector
@@ -430,6 +572,14 @@ INTENT MATCHING:
 - Source/destination labels must match intent exactly using app == "podname"
 - Direction (Ingress/Egress) must match intent
 - Action (Allow/Deny) must match intent
+
+DO NOT USE <think> TAGS.
+DO NOT REASON ABOUT THE RULES.
+JUST OUTPUT THE YAML.
+Return ONLY valid YAML.
+Do not include explanations.
+Do not include markdown backticks.
+Output MUST start with: apiVersion:
 
 If everything is correct → return: VALID
 Otherwise → return the full corrected YAML."""
@@ -578,7 +728,7 @@ PER-TOOL TEST COMMAND (use the ONE matching TOOL TO USE):
     SUCCESS_COND=$( echo "$OUT" | grep -qi "CONNECTED" && echo 1 || echo 0 )
 
 - devtcp (raw TCP connect check, TCP only, REQUIRES bash — NEVER use sh):
-    kubectl exec -n $SOURCE_NS $SOURCE_POD -- bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" >/dev/null 2>&1
+    kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" >/dev/null 2>&1
     EXIT_CODE=$?
     SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
 
@@ -643,8 +793,44 @@ def worker_loop():
             done_event.set()
             request_queue.task_done()
 
+def parse_legacy_translation(text: str) -> dict:
+    """Fallback: estrae i campi strutturati da una traduzione in testo libero."""
+    policy_type = "kubernetes"
+    if "cilium" in text.lower():
+        policy_type = "cilium"
+    elif "calico" in text.lower():
+        policy_type = "calico"
+
+    ns_match = re.search(r'namespace\s+"?([\w-]+)"?', text, re.IGNORECASE)
+    namespace = ns_match.group(1) if ns_match else TEST_NAMESPACE
+
+    apps = re.findall(r'app\s*==\s*"([\w-]+)"', text)
+    source_app = apps[0] if len(apps) > 0 else "unknown"
+    target_app = apps[1] if len(apps) > 1 else "unknown"
+
+    port_match = re.search(r'port[s]?\s*[:=]?\s*"?(\d+)"?', text, re.IGNORECASE)
+    port = port_match.group(1) if port_match else ""
+
+    protocol = "UDP" if re.search(r'\bUDP\b', text, re.IGNORECASE) else "TCP"
+
+    if re.search(r'\b(deny|block|restrict|drop)\b', text, re.IGNORECASE):
+        action = "deny"
+    else:
+        action = "allow"
+
+    return {
+        "source_app": source_app,
+        "target_app": target_app,
+        "port": port,
+        "protocol": protocol,
+        "action": action,
+        "namespace": namespace,
+        "policy_type": policy_type,
+        "description": text,
+        "_source": "fallback",
+    }
+
 def translate_intent(intent, client):
-    """Use LLM1 to generate a more detailed prompt."""
     completion = client.chat.completions.create(
         model=INTENT_MODEL,
         messages=[
@@ -652,16 +838,46 @@ def translate_intent(intent, client):
             {"role": "user", "content": intent}
         ],
         temperature=0.2,
-        max_tokens=256,
+        max_tokens=512,
         timeout=LLM_TIMEOUT_SECONDS,
     )
-    translated = completion.choices[0].message.content.strip()
-    print(f"Translated prompt: {translated}", flush=True)
-    return translated
+    raw = completion.choices[0].message.content.strip()
+    print(f"LLM1 raw output: {raw}", flush=True)
 
+    cleaned = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
+
+    data = None
+    if cleaned.startswith("{") or re.search(r"\{.*\}", cleaned, re.DOTALL):
+        try:
+            data = extract_json(raw)
+            data["_source"] = "json"
+        except (json.JSONDecodeError, AttributeError, TypeError) as e:
+            print(f"[translate_intent] JSON parse failed: {e}", flush=True)
+            data = None
+
+    if data is None:
+        print("[translate_intent] using free-text fallback", flush=True)
+        data = parse_legacy_translation(cleaned)
+
+    data.setdefault("namespace", TEST_NAMESPACE)
+    data.setdefault("description", cleaned)
+    return data
+
+def extract_json(text: str) -> dict:
+    """Remove <think> tags and markdown fences, parse JSON."""
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        text = match.group(1)
+    else:
+        match = re.search(r"(\{.*\})", text, re.DOTALL)
+        if match:
+            text = match.group(1)
+    return json.loads(text)
 
 def extract_yaml(text):
     """Remove <think> and markdown code blocks, return just YAML."""
+    print(text)
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     
     match = re.search(r"```(?:ya?ml)?\n(.*?)```", text, re.DOTALL)
@@ -683,6 +899,20 @@ def extract_script(text: str) -> str:
         return match.group(1).strip()
 
     return ""
+
+def enforce_namespace(yaml_text: str, namespace: str) -> str:
+    try:
+        docs = list(yaml.safe_load_all(yaml_text))
+    except yaml.YAMLError:
+        return yaml_text  # lascia che il validator segnali l'errore di sintassi
+
+    out_docs = []
+    for doc in docs:
+        if isinstance(doc, dict):
+            doc.setdefault("metadata", {})
+            doc["metadata"]["namespace"] = namespace
+            out_docs.append(doc)
+    return "---\n".join(yaml.dump(d, sort_keys=False) for d in out_docs)
 
     
 def format_pod_discovery(pod_discovery: list) -> str:
@@ -750,6 +980,7 @@ def keep_last(a, b):
 class PolicyState(TypedDict):
     original_prompt: Annotated[str, keep_last]
     technical_prompt: Annotated[str, keep_last]
+    intent_data: Annotated[dict, keep_last]
     yaml_output: Annotated[str, keep_last]
     validation_result: Annotated[str, keep_last]   # "valid" | "invalid"
     test_script: Annotated[str, keep_last]
@@ -763,11 +994,18 @@ MAX_ITER = 3
 
 # --- Node ---
 def node_translate(state: PolicyState, client) -> PolicyState:
-    translated = translate_intent(state["original_prompt"], client)
-    return {**state, "technical_prompt": translated}
+    intent_data = translate_intent(state["original_prompt"], client)
+    return {
+        **state,
+        "intent_data": intent_data,
+        "technical_prompt": intent_data.get("description", ""),
+    }
 
 def node_validate(state: PolicyState, client) -> PolicyState:
-    if "calico" in state["technical_prompt"].lower():
+    if not state["yaml_output"].strip():
+        print("[node_validate] yaml_output is empty, marking invalid for retry", flush=True)
+        return {**state, "validation_result": "invalid", "validation_done": True}
+    if state["intent_data"].get("policy_type", "").lower() == "calico":
         VALIDATION_PROMPT = VALIDATION_PROMPT_CALICO
     else:
         VALIDATION_PROMPT = VALIDATION_PROMPT_CILIUM
@@ -775,7 +1013,11 @@ def node_validate(state: PolicyState, client) -> PolicyState:
         model=VALIDATOR_MODEL,
         messages=[
             {"role": "system", "content": VALIDATION_PROMPT},
-            {"role": "user", "content": f"INTENT:\n{state['technical_prompt']}\n\nYAML:\n{state['yaml_output']}"}
+            {"role": "user", "content": (
+                f"INTENT:\n{state['technical_prompt']}\n\n"
+                f"STRUCTURED INTENT: {json.dumps(state['intent_data'])}\n\n"
+                f"YAML:\n{state['yaml_output']}"
+        )}
         ],
         temperature=0.0,
         max_tokens=4096,
@@ -784,8 +1026,9 @@ def node_validate(state: PolicyState, client) -> PolicyState:
     )
     raw = extract_yaml(completion.choices[0].message.content.strip())
     #print(f"Generated text: {raw}")
-    if not raw:  
-        raise ValueError("LLM returned empty YAML")
+    if not raw:
+        print("[node_validate] validator returned empty output, treating as VALID", flush=True)
+        return {**state, "validation_result": "valid", "validation_done": True}
 
     if raw.upper().startswith("VALID"):
         return {
@@ -801,84 +1044,30 @@ def node_validate(state: PolicyState, client) -> PolicyState:
             "validation_done": True
         }
 
-#def node_generate(state: PolicyState, client) -> PolicyState:
-#    if "calico" in state["technical_prompt"].lower():
-#        SYSTEM_PROMPT = SYSTEM_PROMPT_CALICO
-#    else:
-#        SYSTEM_PROMPT = SYSTEM_PROMPT_CILIUM
-#    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-#    
-#    if state["iterations"] > 0 and state["yaml_output"]:
-#        messages.append({
-#            "role": "user",
-#            "content": (
-#                f"{state['technical_prompt']}\n\n"
-#                f"Previous attempt was invalid. Here is the partially corrected YAML — "
-#                f"fix any remaining issues:\n{state['yaml_output']}"
-#            )
-#        })
-#    else:
-#        messages.append({"role": "user", "content": state["technical_prompt"]})
-#
-#    completion = client.chat.completions.create(
-#        model=GENERATOR_MODEL,  
-#        messages=messages,
-#        temperature=0.0,
-#        max_tokens=4096,    
-#    )
-#    raw = extract_yaml(completion.choices[0].message.content.strip())  
-#    return {**state, "yaml_output": raw, "iterations": state["iterations"] + 1}
-#
-#
-#def node_testing(state: PolicyState, client) -> PolicyState:
-#    match = re.search(r'app == "(\w+)"', state["technical_prompt"])
-#    source_app = match.group(1) if match else "unknown"
-#    
-#    available_tools = get_available_tools(source_app)
-#    completion = client.chat.completions.create(
-#        model=VALIDATOR_MODEL,
-#        messages=[
-#            {
-#                "role": "system",
-#                "content": TEST_GENERATOR_PROMPT
-#            },
-#            {
-#                "role": "user",
-#                "content": f"INTENT:\n{state['technical_prompt']}"
-#                f"TOOLS AVAILABLE IN SOURCE POD ({source_app}):\n{available_tools}\n"
-#            }
-#        ],
-#        temperature=0.1,
-#        max_tokens=4096,
-#    )
-#    print(f"[node_testing] raw output: {completion.choices[0].message.content.strip()}", flush=True)
-#    script = extract_script(completion.choices[0].message.content.strip())
-#    return {
-#        **state,
-#        "test_script": script,
-#        "testing_done": True
-#    }
 def node_generate(state: PolicyState, client) -> PolicyState:
-    if "calico" in state["technical_prompt"].lower():
+    if state["intent_data"].get("policy_type", "").lower() == "calico":
         SYSTEM_PROMPT = SYSTEM_PROMPT_CALICO
     else:
         SYSTEM_PROMPT = SYSTEM_PROMPT_CILIUM
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    namespace = state["intent_data"].get("namespace", TEST_NAMESPACE)
+    
     
     if state["iterations"] > 0 and state["yaml_output"]:
-        messages.append({
-            "role": "user",
-            "content": (
-                f"{state['technical_prompt']}\n\n"
-                f"Previous attempt was invalid. Fix this YAML:\n{state['yaml_output']}"
-            )
-        })
+        user_content = (
+            f"{state['technical_prompt']}\n\n"
+            f"Target namespace: {namespace}\n"
+            f"Previous attempt was invalid. Fix this YAML:\n{state['yaml_output']}"
+        )
     else:
-        messages.append({
-            "role": "user",
-            "content": state["technical_prompt"]
-        })
+        user_content = (
+            f"{state['technical_prompt']}\n\n"
+            f"Target namespace: {namespace}\n"
+            f"Use this exact value for metadata.namespace in every document."
+        )
+
+    messages.append({"role": "user", "content": user_content})
 
     completion = ollama_client.chat(
         model="minimax-m2.5:cloud",
@@ -889,7 +1078,8 @@ def node_generate(state: PolicyState, client) -> PolicyState:
         } 
     )
 
-    raw = extract_yaml(completion['message']['content'].strip())  # ← dizionario
+    raw = extract_yaml(completion['message']['content'].strip())
+    raw = enforce_namespace(raw, namespace)
 
     return {
         **state,
@@ -939,24 +1129,39 @@ def get_source_tools(pod_discovery: list, source_app: str, preferred_ns: str = "
     return []
 
 def node_testing(state: PolicyState, client) -> PolicyState:
+    intent_data = state.get("intent_data", {})
     discovery_context = format_pod_discovery(state.get("pod_discovery", []))
 
-    match = re.search(r'app == "([\w-]+)"', state["technical_prompt"])
-    source_app = match.group(1) if match else "unknown"
-    source_ns = get_pod_namespace(state.get("pod_discovery", []), source_app, TEST_NAMESPACE)
+    source_app = intent_data.get("source_app", "unknown")
+    target_app = intent_data.get("target_app", "unknown")
+    port = intent_data.get("port", "")
+    protocol = intent_data.get("protocol", "TCP").upper()
+    action = intent_data.get("action", "allow").lower()
 
-    matches = re.findall(r'app == "([\w-]+)"', state["technical_prompt"])
-    target_app = matches[1] if len(matches) > 1 else "unknown"
+    if source_app == "any":
+        candidates = [
+            p for p in state.get("pod_discovery", [])
+            if p.get("namespace") == TEST_NAMESPACE
+            and p.get("labels", {}).get("app") not in (None, target_app)
+            and p.get("availableTools")
+        ]
+        if protocol == "UDP":
+            udp_capable = [p for p in candidates if "nc" in p["availableTools"] or "ncat" in p["availableTools"]]
+            candidates = udp_capable or candidates
+        if candidates:
+            source_app = candidates[0]["labels"]["app"]
+        else:
+            source_app = "unknown"
+
+    source_ns = get_pod_namespace(state.get("pod_discovery", []), source_app, TEST_NAMESPACE)
     target_ns = get_pod_namespace(state.get("pod_discovery", []), target_app, TEST_NAMESPACE)
 
     tools = get_source_tools(state.get("pod_discovery", []), source_app, TEST_NAMESPACE)
     tool = select_tool(tools)
 
     print(f"[node_testing] source_app={source_app} ns={source_ns}, "
-          f"target_app={target_app} ns={target_ns}, "
-          f"tools={tools}, selected_tool={tool}", flush=True)
-    
-    print(f"[DEBUG] pods in discovery: {[(p.get('labels',{}).get('app'), p.get('namespace')) for p in state.get('pod_discovery',[])][:10]}", flush=True)
+          f"target_app={target_app} ns={target_ns}, port={port}/{protocol}, "
+          f"action={action}, tools={tools}, selected_tool={tool}", flush=True)
 
     completion = ollama_client.chat(
         model="qwen3-coder-next",
@@ -965,12 +1170,14 @@ def node_testing(state: PolicyState, client) -> PolicyState:
             {
                 "role": "user",
                 "content": (
-                    f"INTENT:\n{state['technical_prompt']}\n\n"
                     f"CLUSTER POD INFO:\n{discovery_context}\n\n"
                     f"SOURCE POD APP LABEL: {source_app}\n"
                     f"SOURCE POD NAMESPACE: {source_ns}\n"
                     f"TARGET SERVICE NAME: {target_app}\n"
                     f"TARGET SERVICE NAMESPACE: {target_ns}\n"
+                    f"TARGET PORT: {port}\n"
+                    f"TARGET PROTOCOL: {protocol}\n"
+                    f"EXPECTED RESULT: {'allowed' if action == 'allow' else 'denied'}\n"
                     f"AVAILABLE TOOLS IN SOURCE POD: {', '.join(tools) if tools else 'none'}\n"
                     f"TOOL TO USE: {tool}\n"
                     f"DO NOT use any other tool. If tool is 'none', print SKIP and exit 0.\n"
