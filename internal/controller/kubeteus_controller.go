@@ -186,6 +186,25 @@ func (r *KubeTeusReconciler) processIntent(ctx context.Context, intent string) {
 		return
 	}
 
+	conflicts, conflictErr := DetectAndResolveConflicts(
+		ctx,
+		r.Client,
+		logger,
+		policies.Network,
+		cniType,
+		r.TestNamespace,
+	)
+	if conflictErr != nil {
+		logger.Error(conflictErr, "[ConflictDetector] Error during conflict detection, proceeding anyway")
+	}
+	for _, c := range conflicts {
+		logger.Info("[ConflictDetector] Removed conflicting policy",
+			"name", c.Name,
+			"namespace", c.Namespace,
+			"reason", c.Reason,
+		)
+	}
+
 	if err = enforcer.Enforcer(ctx, r.Client, policies.Network); err != nil {
 		logger.Error(err, "failed to enforce policy")
 		return
@@ -193,16 +212,37 @@ func (r *KubeTeusReconciler) processIntent(ctx context.Context, intent string) {
 	logger.Info("Policies enforced")
 
 	if policies.TestScript != "" {
-		output, err := tester.RunTestScript(ctx, policies.TestScript)
-		if err != nil {
+		output, testErr := tester.RunTestScript(ctx, policies.TestScript)
+		outcome := classifyTestOutput(output, testErr)
+
+		rec := TestResultRecord{
+			Intent:     intent,
+			YAML:       splitYAMLDocuments(strings.Join(policies.Network, "\n---\n")),
+			TestScript: policies.TestScript,
+			TestOutput: output,
+			RunErr:     testErr,
+			Outcome:    outcome,
+			Timestamp:  time.Now(),
+		}
+
+		switch outcome {
+		case OutcomeSkipped:
+			logger.Info("Test SKIPPED (no verifiable connection)", "output", output)
+		case OutcomePassed:
+			logger.Info("Tests passed", "output", output)
+		case OutcomeFailed:
 			logger.Info("Tests FAILED — rolling back")
+			rec.RolledBack = true
 			if rollbackErr := enforcer.Rollback(ctx, r.Client, policies.Network); rollbackErr != nil {
 				logger.Error(rollbackErr, "Rollback failed")
+				rec.RollbackErr = rollbackErr
 			} else {
 				logger.Info("Rollback completed")
 			}
-		} else {
-			logger.Info("Tests passed", "output", output)
+		}
+
+		if logErr := LogTestResult(rec); logErr != nil {
+			logger.Error(logErr, "failed to persist test result to disk")
 		}
 	} else {
 		logger.Info("No test script, skipping tests")
@@ -250,7 +290,6 @@ func (r *KubeTeusReconciler) discoverPodInfo(ctx context.Context) ([]utils.PodDi
 
 		result = append(result, info)
 	}
-	fmt.Printf("Discovery result: %+v\n", result)
 	return result, nil
 }
 
@@ -400,6 +439,32 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 	logger.Info("Policies verified", "ValidationErrors.Count", len(validationErrors), "Policy.Details", policies.Network)
 
+	cniType, err := detectCNIPlugin(ctx, r.Client)
+	if err != nil {
+		logger.Error(err, "failed to detect CNI")
+	}
+
+	// Rileva e risolvi conflitti PRIMA dell'enforcement
+	conflicts, conflictErr := DetectAndResolveConflicts(
+		ctx,
+		r.Client,
+		logger,
+		policies.Network,
+		cniType,
+		r.TestNamespace,
+	)
+	if conflictErr != nil {
+		logger.Error(conflictErr, "[ConflictDetector] Error during conflict detection, proceeding anyway")
+		// non bloccare l'enforcement per un errore di detection
+	}
+	for _, c := range conflicts {
+		logger.Info("[ConflictDetector] Removed conflicting policy",
+			"name", c.Name,
+			"namespace", c.Namespace,
+			"reason", c.Reason,
+		)
+	}
+
 	if err = enforcer.Enforcer(ctx, r.Client, policies.Network); err != nil {
 		logger.Error(err, "failed to enforce policy")
 		return requeueWithError(err)
@@ -407,17 +472,37 @@ func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	logger.Info("Policies enforeced")
 
 	if policies.TestScript != "" {
-		output, err := tester.RunTestScript(ctx, policies.TestScript)
-		if err != nil {
-			logger.Info("Post-enforcement tests FAILED — rolling back policies")
+		output, testErr := tester.RunTestScript(ctx, policies.TestScript)
+		outcome := classifyTestOutput(output, testErr)
 
+		rec := TestResultRecord{
+			Intent:     *r.Intent,
+			YAML:       splitYAMLDocuments(strings.Join(policies.Network, "\n---\n")),
+			TestScript: policies.TestScript,
+			TestOutput: output,
+			RunErr:     testErr,
+			Outcome:    outcome,
+			Timestamp:  time.Now(),
+		}
+
+		switch outcome {
+		case OutcomeSkipped:
+			logger.Info("Test SKIPPED (no verifiable connection)", "test_output", output)
+		case OutcomePassed:
+			logger.Info("Post-enforcement testing completed", "test_output", output)
+		case OutcomeFailed:
+			logger.Info("Post-enforcement tests FAILED — rolling back policies")
+			rec.RolledBack = true
 			if rollbackErr := enforcer.Rollback(ctx, r.Client, policies.Network); rollbackErr != nil {
 				logger.Error(rollbackErr, "Rollback also failed — cluster may be in inconsistent state")
+				rec.RollbackErr = rollbackErr
 			} else {
 				logger.Info("Rollback completed successfully")
 			}
-		} else {
-			logger.Info("Post-enforcement testing completed", "test_output", output)
+		}
+
+		if logErr := LogTestResult(rec); logErr != nil {
+			logger.Error(logErr, "failed to persist test result to disk")
 		}
 	} else {
 		logger.Info("No test script available, skipping connectivity tests")

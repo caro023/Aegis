@@ -1,0 +1,80 @@
+======================================================================
+TIMESTAMP: 2026-06-25T10:11:31+02:00
+OUTCOME:   SKIP
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=dns-worker uses no networking tools. Allow ingress to dns-worker from all pods on UDP port 53 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-to-dns-worker
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: dns-worker
+  ingress:
+  - fromEndpoints:
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: UDP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+echo "SKIP: no networking tool available in source pod"
+exit 0
+
+--- TEST OUTPUT ---
+SKIP: no networking tool available in source pod
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:38:58+02:00
+OUTCOME:   SKIP
+======================================================================
+
+--- INTENT ---
+{"prompt":"Stop the api-backend from reaching the cache."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egressDeny:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-all-egress
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels: {}
+
+--- TEST SCRIPT ---
+#!/bin/bash
+echo "SKIP: no networking tool available in source pod"
+exit 0
+
+--- TEST OUTPUT ---
+SKIP: no networking tool available in source pod
+

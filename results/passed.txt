@@ -1,0 +1,5913 @@
+======================================================================
+TIMESTAMP: 2026-06-24T09:01:32+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:02:20+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test connectivity on port 6379. Allow egress from frontend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:02:40+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=api-backend has no curl, wget, or nc available, only bash and openssl. Allow egress from api-backend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:03:44+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=toolbox uses nc to test connectivity. Allow egress from toolbox to grpc-service on TCP port 50051 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-toolbox-egress-to-grpc-service
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: toolbox
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: grpc-service
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-ingress-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:05:08+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=dns-worker uses no networking tools. Allow ingress to dns-worker from all pods on UDP port 53 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-to-dns-worker
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: dns-worker
+  ingress:
+  - fromEndpoints:
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: UDP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=cache -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc dns-worker -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -u -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:06:31+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Let the frontend talk to the api-backend."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:13:03+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Let the toolbox connect to the cache."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-toolbox-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: toolbox
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:15:00+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"I want the api-backend to be able to reach the cache service."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: api-backend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:16:01+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Allow the frontend to access the redis cache."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:17:24+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Stop the api-backend from reaching the cache."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egressDeny:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+  egress:
+  - toEndpoints:
+    - matchLabels: {}
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  # For DENY intent, SUCCESS means connection FAILED (non-zero exit)
+  SUCCESS_COND=$( [ $EXIT_CODE -ne 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection was denied as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection was not denied."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection was denied as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:18:57+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Make sure only the toolbox can reach the grpc service."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-ingress-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:20:28+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Everyone should be able to do DNS lookups against the dns worker."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-to-dns-worker
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: dns-worker
+  ingress:
+  - fromEndpoints:
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: UDP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=cache -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc dns-worker -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -u -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:21:38+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"The grpc service should not be reachable by anyone except toolbox."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-ingress-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-24T09:22:46+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Secure the cache so random pods can't just connect to it."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-all-ingress-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingressDeny:
+  - fromEndpoints:
+    - matchLabels: {}
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  # Invert SUCCESS_COND because we expect DENIED (connection should fail)
+  SUCCESS_COND=$( [ $EXIT_CODE -ne 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection was denied as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i succeeded unexpectedly. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection was not denied as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection was denied as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T07:01:53+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T07:05:29+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=toolbox uses nc to test connectivity. Allow egress from toolbox to grpc-service on TCP port 50051 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-toolbox-egress-to-grpc-service
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: toolbox
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: grpc-service
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-ingress-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T07:05:57+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=dns-worker uses no networking tools. Allow ingress to dns-worker from all pods on UDP port 53 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-to-dns-worker
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: dns-worker
+  ingress:
+  - fromEndpoints:
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: UDP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=grpc-service -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc dns-worker -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -u -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T07:06:44+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Let the frontend talk to the api-backend."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T07:12:29+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"I want my frontend to be reachable from everywhere."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-all-to-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  ingress:
+  - fromEndpoints:
+    - matchLabels: {}
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc frontend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc frontend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc frontend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T07:13:33+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Stop the api-backend from reaching the cache."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egressDeny:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-all-egress-from-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels: {}
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  # For DENY intent, success is when connection is *not* established (non-zero exit)
+  SUCCESS_COND=$( [ $EXIT_CODE -ne 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection was denied as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection was not denied as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection was denied as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T07:14:57+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Make sure only the toolbox can reach the grpc service."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T07:28:12+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Everyone should be able to do DNS lookups against the dns worker."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-to-dns-worker
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: dns-worker
+  ingress:
+  - fromEndpoints:
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: UDP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=grpc-service -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc dns-worker -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -u -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T07:29:16+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"The grpc service should not be reachable by anyone except toolbox."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T07:30:07+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Secure the cache so random pods can't just connect to it."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-all-ingress-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingressDeny:
+  - fromEndpoints:
+    - matchLabels: {}
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  # For DENIED expected result, SUCCESS_COND is when connection FAILS (non-zero exit)
+  SUCCESS_COND=$( [ $EXIT_CODE -ne 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection was denied as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection was denied as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:00:22+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:00:47+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test connectivity on port 6379. Allow egress from frontend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:01:12+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=api-backend has no curl, wget, or nc available, only bash and openssl. Allow egress from api-backend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-to-cache-egress
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-api-backend-ingress
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:01:50+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=cache uses nc to test connectivity. Deny ingress to cache from all pods except frontend on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:02:11+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=toolbox uses nc to test connectivity. Allow egress from toolbox to grpc-service on TCP port 50051 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-toolbox-to-grpc-service
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: toolbox
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: grpc-service
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:02:29+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=dns-worker uses no networking tools. Allow ingress to dns-worker from all pods on UDP port 53 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-to-dns-worker
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: dns-worker
+  ingress:
+  - fromEndpoints:
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: UDP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=grpc-service -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc dns-worker -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -u -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:03:29+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Let the frontend talk to the api-backend."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:04:14+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Let the toolbox connect to the cache."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-toolbox-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: toolbox
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:04:58+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"I want the api-backend to be able to reach the cache service."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: api-backend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:06:30+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Allow the frontend to access the redis cache."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:09:35+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Stop the api-backend from reaching the cache."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egressDeny:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-all-egress
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels: {}
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  # For DENY expected, SUCCESS means connection FAILED (non-zero exit)
+  SUCCESS_COND=$( [ $EXIT_CODE -ne 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection was denied as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection succeeded when it should have been denied."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection was denied as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T09:12:37+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Lock down the cache so only the frontend can connect."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:09:40+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend-egress
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend-ingress
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:10:05+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test connectivity on port 6379. Allow egress from frontend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:10:57+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=cache uses nc to test connectivity. Deny ingress to cache from all pods except frontend on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:11:20+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=toolbox uses nc to test connectivity. Allow egress from toolbox to grpc-service on TCP port 50051 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-toolbox-to-grpc-service
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: toolbox
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: grpc-service
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:29:17+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:29:53+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test connectivity on port 6379. Allow egress from frontend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:30:51+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=api-backend has no curl, wget, or nc available, only bash and openssl. Allow egress from api-backend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:31:50+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=toolbox uses nc to test connectivity. Allow egress from toolbox to grpc-service on TCP port 50051 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-toolbox-egress-to-grpc-service
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: toolbox
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: grpc-service
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-ingress-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:32:31+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=dns-worker uses no networking tools. Allow ingress to dns-worker from all pods on UDP port 53 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-to-dns-worker
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: dns-worker
+  ingress:
+  - fromEndpoints:
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: UDP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=grpc-service -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc dns-worker -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -u -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:33:57+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Let the frontend talk to the api-backend."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:35:20+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Let the toolbox connect to the cache."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-toolbox-egress-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: toolbox
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-ingress-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:36:10+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"I want the api-backend to be able to reach the cache service."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: api-backend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:36:51+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Allow the frontend to access the redis cache."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:41:20+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Make sure only the toolbox can reach the grpc service."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:42:14+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Lock down the cache so only the frontend can connect."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:43:04+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Everyone should be able to do DNS lookups against the dns worker."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-all-to-dns-worker
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: dns-worker
+  ingress:
+  - fromEndpoints:
+    - {}
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc dns-worker -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:44:31+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"The grpc service should not be reachable by anyone except toolbox."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-ingress-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-25T10:46:24+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Secure the cache so random pods can't just connect to it."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: deny-all-ingress-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingressDeny:
+  - fromEndpoints:
+    - matchLabels: {}
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  # For DENIED expectation, SUCCESS means connection *failed* (non-zero exit)
+  SUCCESS_COND=$( [ $EXIT_CODE -ne 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection was denied as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection was not denied as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection was denied as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-26T22:38:43+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-26T22:39:37+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test connectivity on port 6379. Allow egress from frontend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-26T22:40:03+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=api-backend has no curl, wget, or nc available, only bash and openssl. Allow egress from api-backend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-26T22:41:06+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-26T22:41:27+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test connectivity on port 6379. Allow egress from frontend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-26T22:46:18+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-27T21:48:32+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-27T22:24:41+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T09:23:29+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T17:25:07+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T18:23:05+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T18:38:50+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test HTTP connectivity. Allow egress from frontend to api-backend on TCP port 8000 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '8000'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T18:39:44+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=frontend uses nc to test connectivity on port 6379. Allow egress from frontend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T18:40:45+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=api-backend has no curl, wget, or nc available, only bash and openssl. Allow egress from api-backend to cache on TCP port 6379 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: api-backend
+    toPorts:
+    - ports:
+      - port: '6379'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T18:42:14+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=toolbox uses nc to test connectivity. Allow egress from toolbox to grpc-service on TCP port 50051 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-toolbox-to-grpc-service
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: toolbox
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: grpc-service
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-grpc-service-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: grpc-service
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+    toPorts:
+    - ports:
+      - port: '50051'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc grpc-service -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc grpc-service -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T18:42:29+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"In the test-pods namespace, the pod labeled app=dns-worker uses no networking tools. Allow ingress to dns-worker from all pods on UDP port 53 in the test-pods namespace. Apply the policy to the test-pods namespace."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-to-dns-worker
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: dns-worker
+  ingress:
+  - fromEndpoints:
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: '53'
+        protocol: UDP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc dns-worker -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc dns-worker -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -u -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T18:43:51+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Let the frontend talk to the api-backend."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: api-backend
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc api-backend -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc api-backend -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T18:44:37+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Let the toolbox connect to the cache."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-toolbox-egress-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: toolbox
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-ingress-from-toolbox
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: toolbox
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=toolbox -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T18:45:19+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"I want the api-backend to be able to reach the cache service."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-api-backend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: api-backend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-api-backend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: api-backend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=api-backend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- timeout 3 bash -c "echo > /dev/tcp/$SVC_IP/$SVC_PORT" 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
+======================================================================
+TIMESTAMP: 2026-06-28T18:45:56+02:00
+OUTCOME:   PASS
+======================================================================
+
+--- INTENT ---
+{"prompt":"Allow the frontend to access the redis cache."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-frontend-to-cache
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: frontend
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: cache
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-cache-from-frontend
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: cache
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: frontend
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="test-pods"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=frontend -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc cache -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc cache -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+=== TEST START ===
+SUCCESS: Connection behaved as expected.
+
