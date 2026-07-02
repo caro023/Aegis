@@ -458,16 +458,16 @@ CORRECT Cilium example (use this as reference):
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
-  name: allow-frontend-to-checkoutservice
+  name: allow-pod1-to-pod2
   namespace: default
 spec:
   endpointSelector:
     matchLabels:
-      app: frontend
+      app: pod1
   egress:
   - toEndpoints:
     - matchLabels:
-        app: checkoutservice
+        app: pod2
     toPorts:
     - ports:
       - port: "80"
@@ -476,16 +476,16 @@ spec:
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
-  name: allow-checkoutservice-from-frontend
+  name: allow-pod2-from-pod1
   namespace: test
 spec:
   endpointSelector:
     matchLabels:
-      app: checkoutservice
+      app: pod2
   ingress:
   - fromEndpoints:
     - matchLabels:
-        app: frontend
+        app: pod1
     toPorts:
     - ports:
       - port: "80"
@@ -687,6 +687,11 @@ BIDIRECTIONAL VALIDATION (CRITICAL):
   - If only one side is present → ADD the missing side.
   - Separate multiple policies with '---'.
 
+EGRESS COMPLETENESS CHECK:
+For every ingress rule allowing traffic FROM pod X TO pod Y,
+verify that an egress policy exists on pod X allowing traffic to pod Y.
+If the egress policy on the source pod is missing, ADD it.
+
 DENY RULE VALIDATION:
 - Deny rules MUST use 'ingressDeny' or 'egressDeny'.
 - Deny rules MUST NOT contain toPorts.
@@ -701,16 +706,34 @@ CORRECT Cilium example (use as reference):
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
-  name: allow-cartservice-to-checkoutservice
+  name: allow-pod1-to-pod2
   namespace: default
 spec:
   endpointSelector:
     matchLabels:
-      app: cartservice
+      app: pod1
   egress:
   - toEndpoints:
     - matchLabels:
-        app: checkoutservice
+        app: pod2
+    toPorts:
+    - ports:
+      - port: "80"
+        protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-pod2-from-pod1
+  namespace: test
+spec:
+  endpointSelector:
+    matchLabels:
+      app: pod2
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: pod1
     toPorts:
     - ports:
       - port: "80"
@@ -916,7 +939,7 @@ def translate_intent(intent, client):
         try:
             data = extract_json(cleaned)
             data["_source"] = "json"
-            print(cleaned)
+           # print(cleaned)
         except (json.JSONDecodeError, AttributeError, TypeError) as e:
             print(f"[translate_intent] JSON parse failed: {e}", flush=True)
             data = None
@@ -943,8 +966,6 @@ def extract_json(text: str) -> dict:
 
 def extract_yaml(text: str) -> str:
     # Rimuovi think tags
-    print("entry YAML in extract :")
-    print(text)
     text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
     
     # Cerca blocco con backtick (multi-doc: prendi TUTTO fino all'ultimo ```)
@@ -957,11 +978,6 @@ def extract_yaml(text: str) -> str:
     yaml_start = re.search(r'^(---|apiVersion:)', text, re.MULTILINE)
     if yaml_start:
         return text[yaml_start.start():].strip()
-    
-    print("exit YAML ")
-    print(text)
-    print("stripped yaml")
-    print(text.strip())
     
     return text.strip()
 
@@ -1008,18 +1024,15 @@ def format_pod_discovery(pod_discovery: list) -> str:
         name      = pod.get("name", "unknown")
         namespace = pod.get("namespace", "default")
         ports     = pod.get("ports", [])
-        tools     = pod.get("availableTools", [])
         labels    = pod.get("labels", {})
 
         port_strs = [f"{p['port']}/{p['protocol']}" for p in ports] if ports else ["none"]
-        tool_strs = tools if tools else ["none"]
         label_str = ", ".join(f"{k}={v}" for k, v in labels.items()) if labels else "none"
 
         lines.append(
             f"Pod: {name} (ns: {namespace})\n"
             f"  Labels:  {label_str}\n"
             f"  Ports:   {', '.join(port_strs)}\n"
-            f"  Tools:   {', '.join(tool_strs)}"
         )
 
     return "\n".join(lines)
@@ -1089,15 +1102,19 @@ def node_validate(state: PolicyState, client) -> PolicyState:
         VALIDATION_PROMPT = VALIDATION_PROMPT_CALICO
     else:
         VALIDATION_PROMPT = VALIDATION_PROMPT_CILIUM
+        
+    discovery_context = format_pod_discovery(state.get("pod_discovery", []))
+
     completion = client.chat.completions.create(
         model=VALIDATOR_MODEL,
         messages=[
             {"role": "system", "content": VALIDATION_PROMPT},
             {"role": "user", "content": (
                 f"INTENT:\n{state['technical_prompt']}\n\n"
+                f"AVAILABLE PODS AND LABELS:\n{discovery_context}\n\n"
                 f"STRUCTURED INTENT: {json.dumps(state['intent_data'])}\n\n"
                 f"YAML:\n{state['yaml_output']}"
-        )}
+            )}
         ],
         temperature=0.0,
         max_tokens=4096,
@@ -1105,7 +1122,6 @@ def node_validate(state: PolicyState, client) -> PolicyState:
         timeout=LLM_TIMEOUT_SECONDS,
     )
     raw = extract_yaml(completion.choices[0].message.content.strip())
-    #print(f"Generated text: {raw}")
     if not raw:
         print("[node_validate] validator returned empty output, treating as VALID", flush=True)
         return {**state, "validation_result": "valid", "validation_done": True}
@@ -1132,11 +1148,12 @@ def node_generate(state: PolicyState, client) -> PolicyState:
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     namespace = state["intent_data"].get("namespace", TEST_NAMESPACE)
-    
-    
+    discovery_context = format_pod_discovery(state.get("pod_discovery", []))
+
     if state["iterations"] > 0 and state["yaml_output"]:
         user_content = (
             f"{state['technical_prompt']}\n\n"
+            f"Available pods and their labels in the cluster:\n{discovery_context}\n\n"
             f"Target namespace: {namespace}\n"
             f"Previous attempt was invalid. Fix this YAML:\n{state['yaml_output']}"
             f"If you have to output more than one YAML separate them with ---"
@@ -1144,6 +1161,7 @@ def node_generate(state: PolicyState, client) -> PolicyState:
     else:
         user_content = (
             f"{state['technical_prompt']}\n\n"
+            f"Available pods and their labels in the cluster:\n{discovery_context}\n\n"
             f"Target namespace: {namespace}\n"
             f"Use this exact value for metadata.namespace in every document."
             f"If you have to output more than one YAML separate them with ---"
@@ -1262,12 +1280,10 @@ def node_testing(state: PolicyState, client) -> PolicyState:
         state.get("pod_discovery", []), source_app, TEST_NAMESPACE)
     tool = select_tool(tools)
 
-    print(f"[node_testing] source_app={source_app} ns={source_ns}, "
-          f"target_app={target_app} ns={target_ns}, port={port}/{protocol}, "
-          f"action={action}, tools={tools}, selected_tool={tool}", flush=True)
+  #  print(f"[node_testing] source_app={source_app} ns={source_ns}, "
+   #       f"target_app={target_app} ns={target_ns}, port={port}/{protocol}, "
+    #      f"action={action}, tools={tools}, selected_tool={tool}", flush=True)
 
-    # Log tutte le connections per debug
-    print(f"[node_testing] all connections: {connections}", flush=True)
 
     completion = ollama_client.chat(
         model="qwen3-coder-next",

@@ -31,7 +31,7 @@ import (
 	"github.com/cclab-inu/KubeTeus/pkg/tester"
 	"github.com/cclab-inu/KubeTeus/pkg/utils"
 	"github.com/cclab-inu/KubeTeus/pkg/validator"
-	appsv1 "k8s.io/api/apps/v1"
+	//appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 
@@ -42,13 +42,13 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
+	//"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const (
@@ -70,11 +70,6 @@ type KubeTeusReconciler struct {
 	startTime    time.Time
 	HTTPClient   *http.Client
 	podInfoCache []utils.PodDiscoveryInfo
-}
-
-func (r *KubeTeusReconciler) SetIntent(intent string) {
-	*r.Intent = intent
-	r.Reconcile(context.TODO(), ctrl.Request{})
 }
 
 func (r *KubeTeusReconciler) EnqueueIntent(intent string) (bool, error) {
@@ -346,170 +341,6 @@ func ExecInPod(ctx context.Context, c client.Client, namespace, podName, contain
 	return buf.String(), err
 }
 
-// +kubebuilder:rbac:groups=policy,resources=kubeteuses,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=policy,resources=kubeteuses/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=policy,resources=kubeteuses/finalizers,verbs=update
-
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the KubeTeus object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.20.4/pkg/reconcile
-func (r *KubeTeusReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-	//var finalIntent []string
-	var prompts utils.Prompt
-	var policies utils.Policy
-	var podInfo utils.NetInfo
-	var entities []utils.Entity
-	var err error
-	if r.Mode == "user" && r.Intent != nil && *r.Intent != "" {
-		logger.Info("Using raw intent (LLM-based pipeline)")
-
-		// Find cluster services
-		servicesContext, err := r.getClusterServices(ctx)
-		if err != nil {
-			logger.Error(err, "failed to get cluster services")
-			return reconcile.Result{}, err
-		}
-
-		// Find the CNI
-		cniType, err := detectCNIPlugin(ctx, r.Client)
-		if err != nil {
-			logger.Error(err, "failed to detect CNI")
-			return reconcile.Result{}, err
-		}
-
-		// Build the final prompt
-		var finalPrompt string
-
-		switch cniType {
-		case "cilium":
-			finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a CiliumNetworkPolicy.", *r.Intent, servicesContext)
-		case "calico":
-			apiVersion := detectCalicoAPIVersion(ctx, r.Client)
-			finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a CalicoNetworkPolicy with apiVersion: %s.", *r.Intent, servicesContext, apiVersion)
-		default:
-			finalPrompt = fmt.Sprintf("%s\n%s\nGenerate a Kubernetes NetworkPolicy.", *r.Intent, servicesContext)
-		}
-
-		prompts.Network = append(prompts.Network, finalPrompt)
-	} else if r.Mode == "user" && (r.Intent == nil || *r.Intent == "") {
-		logger.Info("Intent not found")
-		return doNotRequeue()
-	}
-	logger.Info("Prompts created") //, "Network Prompts", prompts.Network)
-	if len(prompts.Network) == 0 {
-		logger.Error(fmt.Errorf("no prompts generated"), "empty prompt pipeline")
-		return doNotRequeue()
-	}
-
-	for i := 0; i < maxRetries; i++ {
-		policies, err = policygenerator.PolicyGenerator(ctx, r.Client, r.Model, prompts)
-		if err == nil && len(policies.Network) > 0 {
-			break
-		}
-		logger.Info("Policy generation attempt failed, retrying",
-			"attempt", i+1, "maxRetries", maxRetries, "error", err)
-		time.Sleep(retryInterval)
-	}
-	if err != nil {
-		logger.Error(err, "failed to execute policy creation after retries")
-		return doNotRequeue()
-	}
-	if policies.Network == nil || len(policies.Network) == 0 {
-		logger.Error(err, "no valid policies generated after retries")
-		return doNotRequeue()
-	}
-
-	logger.Info("Policies generated", "Network Policies", policies.Network)
-
-	validationErrors, err := validator.Validator(ctx, r.Client, logger, podInfo, entities, policies.Network)
-	if err != nil {
-		logger.Error(err, "Validator error — likely API server issue")
-		return requeueWithError(err)
-	}
-	if len(validationErrors) > 0 {
-		logger.Error(fmt.Errorf("policy validation failed"), "Identified a misconfiguration of Policy", "errors", validationErrors)
-		return doNotRequeue()
-	}
-	logger.Info("Policies verified", "ValidationErrors.Count", len(validationErrors), "Policy.Details", policies.Network)
-
-	cniType, err := detectCNIPlugin(ctx, r.Client)
-	if err != nil {
-		logger.Error(err, "failed to detect CNI")
-	}
-
-	// Rileva e risolvi conflitti PRIMA dell'enforcement
-	conflicts, conflictErr := DetectAndResolveConflicts(
-		ctx,
-		r.Client,
-		logger,
-		policies.Network,
-		cniType,
-		r.TestNamespace,
-	)
-	if conflictErr != nil {
-		logger.Error(conflictErr, "[ConflictDetector] Error during conflict detection, proceeding anyway")
-		// non bloccare l'enforcement per un errore di detection
-	}
-	for _, c := range conflicts {
-		logger.Info("[ConflictDetector] Removed conflicting policy",
-			"name", c.Name,
-			"namespace", c.Namespace,
-			"reason", c.Reason,
-		)
-	}
-
-	if err = enforcer.Enforcer(ctx, r.Client, policies.Network); err != nil {
-		logger.Error(err, "failed to enforce policy")
-		return requeueWithError(err)
-	}
-	logger.Info("Policies enforeced")
-
-	if policies.TestScript != "" {
-		output, testErr := tester.RunTestScript(ctx, policies.TestScript)
-		outcome := classifyTestOutput(output, testErr)
-
-		rec := TestResultRecord{
-			Intent:     *r.Intent,
-			YAML:       splitYAMLDocuments(strings.Join(policies.Network, "\n---\n")),
-			TestScript: policies.TestScript,
-			TestOutput: output,
-			RunErr:     testErr,
-			Outcome:    outcome,
-			Timestamp:  time.Now(),
-		}
-
-		switch outcome {
-		case OutcomeSkipped:
-			logger.Info("Test SKIPPED (no verifiable connection)", "test_output", output)
-		case OutcomePassed:
-			logger.Info("Post-enforcement testing completed", "test_output", output)
-		case OutcomeFailed:
-			logger.Info("Post-enforcement tests FAILED — rolling back policies")
-			rec.RolledBack = true
-			if rollbackErr := enforcer.Rollback(ctx, r.Client, policies.Network); rollbackErr != nil {
-				logger.Error(rollbackErr, "Rollback also failed — cluster may be in inconsistent state")
-				rec.RollbackErr = rollbackErr
-			} else {
-				logger.Info("Rollback completed successfully")
-			}
-		}
-
-		if logErr := LogTestResult(rec); logErr != nil {
-			logger.Error(logErr, "failed to persist test result to disk")
-		}
-	} else {
-		logger.Info("No test script available, skipping connectivity tests")
-	}
-	return doNotRequeue()
-}
-
 // StartPredicate filters events based on t dhe start time of the controller.
 func StartPredicate(startTime time.Time) predicate.Predicate {
 	return predicate.Funcs{
@@ -534,20 +365,20 @@ func (r *KubeTeusReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.Queue = utils.NewIntentQueue(50)
 
 	ctx := context.Background() // oppure passa il ctx del manager se disponibile
-	r.refreshPodInfoCache(ctx)
+	//r.refreshPodInfoCache(ctx)
 
-	go func() {
-		ticker := time.NewTicker(100 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				r.refreshPodInfoCache(ctx)
-			}
-		}
-	}()
+	//	go func() {
+	//		ticker := time.NewTicker(100 * time.Minute)
+	//		defer ticker.Stop()
+	//		for {
+	//			select {
+	//			case <-ctx.Done():
+	//				return
+	//			case <-ticker.C:
+	//				r.refreshPodInfoCache(ctx)
+	//			}
+	//		}
+	//	}()
 
 	go r.runQueueWorker(ctx)
 
@@ -586,13 +417,20 @@ func (r *KubeTeusReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 	}()
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&v1.Pod{}, builder.WithPredicates(StartPredicate(r.startTime))).
-		Owns(&appsv1.Deployment{}, builder.WithPredicates(StartPredicate(r.startTime))).
-		Owns(&v1.Service{}, builder.WithPredicates(StartPredicate(r.startTime))).
-		WithEventFilter(predicate.GenerationChangedPredicate{}).
-		Named("kubeteus").
-		Complete(r)
+	return mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		r.refreshPodInfoCache(ctx)
+
+		ticker := time.NewTicker(100 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-ticker.C:
+				r.refreshPodInfoCache(ctx)
+			}
+		}
+	}))
 }
 
 func detectCNIPlugin(ctx context.Context, k8sClient client.Client) (string, error) {

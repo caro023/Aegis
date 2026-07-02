@@ -29,7 +29,6 @@ func Validator(ctx context.Context, k8sClient client.Client, logger logr.Logger,
 		return nil, fmt.Errorf("unsupported policies type: %T", policies)
 	}
 
-	logger.Info("[CRD Validator] CRD Validator started")
 	for _, policy := range policySlice {
 		// Convert policy to map[string]interface{}
 		policyMap, err := toMap(policy)
@@ -47,14 +46,12 @@ func Validator(ctx context.Context, k8sClient client.Client, logger logr.Logger,
 		logger.Info("[CRD Validator] Policy CRD syntax validated", "Result", "No problems")
 	}
 
-	logger.Info("[Resource Validator] Resource Validator started")
 	resourceValidationErrors := ResourceValidator(ctx, k8sClient, logger, policies)
 	if len(resourceValidationErrors) > 0 {
 		validationErrors = append(validationErrors, resourceValidationErrors...)
 	}
 	logger.Info("[Resource Validator] Resource Validator done")
 
-	logger.Info("[Property Validator] Property Validator started")
 	propertyValidationErrors := PropertyValidator(ctx, k8sClient, policies)
 	if len(propertyValidationErrors) > 0 {
 		validationErrors = append(validationErrors, propertyValidationErrors...)

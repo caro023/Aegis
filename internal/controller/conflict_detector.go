@@ -12,7 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
+	// "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -76,10 +76,8 @@ func DetectAndResolveConflicts(
 	namespace string,
 ) ([]ConflictResolution, error) {
 
-	logger.Info("[ConflictDetector] Entering", "cniType", cniType, "namespace", namespace, "yamlCount", len(newPoliciesYAML))
 	// 1. Parsa le nuove policy dallo YAML
 	newPolicies := make([]parsedPolicy, 0, len(newPoliciesYAML))
-	logger.Info("[ConflictDetector] Parsed policies", "count", len(newPolicies))
 	for _, rawYAML := range newPoliciesYAML {
 		for _, doc := range splitYAMLDocuments(rawYAML) {
 			pp, err := parsePolicyYAML(doc, cniType)
@@ -102,15 +100,6 @@ func DetectAndResolveConflicts(
 		return nil, fmt.Errorf("listing existing policies: %w", err)
 	}
 
-	logger.Info("[ConflictDetector] Existing policies found", "count", len(existing))
-	for _, p := range existing {
-		logger.Info("[ConflictDetector] Existing policy",
-			"name", p.name,
-			"podSelector", p.podSelector,
-			"ingressRules", len(p.ingressRules),
-			"egressRules", len(p.egressRules),
-		)
-	}
 	// 3. Rileva e risolvi conflitti
 	var resolutions []ConflictResolution
 
@@ -121,11 +110,11 @@ func DetectAndResolveConflicts(
 				continue
 			}
 
-			logger.Info("[ConflictDetector] Conflict detected — removing existing policy",
-				"existing", exP.name,
-				"namespace", exP.namespace,
-				"reason", reason,
-			)
+			//			logger.Info("[ConflictDetector] Conflict detected — removing existing policy",
+			//				"existing", exP.name,
+			//				"namespace", exP.namespace,
+			//				"reason", reason,
+			//			)
 
 			if err := deleteExistingPolicy(ctx, k8sClient, exP, cniType); err != nil {
 				logger.Error(err, "[ConflictDetector] Failed to delete conflicting policy",
@@ -443,7 +432,7 @@ func listExistingPolicies(
 	cniType, namespace string,
 ) ([]parsedPolicy, error) {
 
-	logger := log.FromContext(ctx)
+	//logger := log.FromContext(ctx)
 
 	gvr := policyGVR(cniType)
 	list := &unstructured.UnstructuredList{}
@@ -467,7 +456,7 @@ func listExistingPolicies(
 		if err != nil {
 			continue
 		}
-		logger.Info("[ConflictDetector] Parsed policy", "name", pp.name)
+		//logger.Info("[ConflictDetector] Parsed policy", "name", pp.name)
 		if pp.name == "" {
 			pp.name = item.GetName()
 		}
@@ -475,15 +464,6 @@ func listExistingPolicies(
 			pp.namespace = item.GetNamespace()
 		}
 		policies = append(policies, pp)
-	}
-	logger.Info("[ConflictDetector] Existing policies found", "count", len(policies))
-	for _, p := range policies {
-		logger.Info("[ConflictDetector] Existing policy",
-			"name", p.name,
-			"podSelector", p.podSelector,
-			"ingressRules", len(p.ingressRules),
-			"egressRules", len(p.egressRules),
-		)
 	}
 	return policies, nil
 }

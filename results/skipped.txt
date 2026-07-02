@@ -1,80 +1,239 @@
 ======================================================================
-TIMESTAMP: 2026-06-25T10:11:31+02:00
+TIMESTAMP: 2026-07-01T17:43:58+02:00
 OUTCOME:   SKIP
 ======================================================================
 
 --- INTENT ---
-{"prompt":"In the test-pods namespace, the pod labeled app=dns-worker uses no networking tools. Allow ingress to dns-worker from all pods on UDP port 53 in the test-pods namespace. Apply the policy to the test-pods namespace."}
-
---- GENERATED YAML ---
-apiVersion: cilium.io/v2
-kind: CiliumNetworkPolicy
-metadata:
-  name: allow-ingress-to-dns-worker
-  namespace: test-pods
-spec:
-  endpointSelector:
-    matchLabels:
-      app: dns-worker
-  ingress:
-  - fromEndpoints:
-    - matchLabels: {}
-    toPorts:
-    - ports:
-      - port: '53'
-        protocol: UDP
-
---- TEST SCRIPT ---
-#!/bin/bash
-echo "SKIP: no networking tool available in source pod"
-exit 0
-
---- TEST OUTPUT ---
-SKIP: no networking tool available in source pod
-
-======================================================================
-TIMESTAMP: 2026-06-25T10:38:58+02:00
-OUTCOME:   SKIP
-======================================================================
-
---- INTENT ---
-{"prompt":"Stop the api-backend from reaching the cache."}
+{"prompt":"The metrics-collector needs to scrape all services in the namespace on port 9090. Allow that."}
 
 --- GENERATED YAML ---
 [document 1/2]
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
-  name: deny-api-backend-to-cache
+  name: allow-metrics-collector-egress-to-all
   namespace: test-pods
 spec:
   endpointSelector:
     matchLabels:
-      app: api-backend
-  egressDeny:
+      app: metrics-collector
+  egress:
   - toEndpoints:
-    - matchLabels:
-        app: cache
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: '9090'
+        protocol: TCP
 ---
 [document 2/2]
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
-  name: allow-api-backend-all-egress
+  name: allow-all-ingress-from-metrics-collector
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels: {}
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: metrics-collector
+    toPorts:
+    - ports:
+      - port: '9090'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="default"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=metrics-collector -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc any -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc any -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc any -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+SKIP: target service not found in ns default
+
+======================================================================
+TIMESTAMP: 2026-07-01T18:29:06+02:00
+OUTCOME:   SKIP
+======================================================================
+
+--- INTENT ---
+{"prompt":"The metrics-collector needs to scrape all services in the namespace on port 9090. Allow that."}
+
+--- GENERATED YAML ---
+[document 1/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-metrics-collector-egress
   namespace: test-pods
 spec:
   endpointSelector:
     matchLabels:
-      app: api-backend
+      app: metrics-collector
   egress:
   - toEndpoints:
     - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: '9090'
+        protocol: TCP
+---
+[document 2/2]
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-metrics-collector-ingress
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels: {}
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: metrics-collector
+    toPorts:
+    - ports:
+      - port: '9090'
+        protocol: TCP
 
 --- TEST SCRIPT ---
 #!/bin/bash
-echo "SKIP: no networking tool available in source pod"
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="default"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=metrics-collector -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc any -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc any -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc any -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
 exit 0
 
 --- TEST OUTPUT ---
-SKIP: no networking tool available in source pod
+SKIP: target service not found in ns default
+
+======================================================================
+TIMESTAMP: 2026-07-02T07:41:05+02:00
+OUTCOME:   SKIP
+======================================================================
+
+--- INTENT ---
+{"prompt":"The metrics-collector needs to scrape all services in the namespace on port 9090. Allow that."}
+
+--- GENERATED YAML ---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-metrics-collector-egress-to-all
+  namespace: test-pods
+spec:
+  endpointSelector:
+    matchLabels:
+      app: metrics-collector
+  egress:
+  - toEndpoints:
+    - matchLabels: {}
+    toPorts:
+    - ports:
+      - port: '9090'
+        protocol: TCP
+
+--- TEST SCRIPT ---
+#!/bin/bash
+set -uo pipefail
+
+SOURCE_NS="test-pods"
+TARGET_NS="default"
+
+SOURCE_POD=$(kubectl get pods -n $SOURCE_NS -l app=metrics-collector -o jsonpath='{.items[0].metadata.name}')
+if [ -z "$SOURCE_POD" ]; then echo "SKIP: source pod not found in ns $SOURCE_NS"; exit 0; fi
+
+kubectl get svc any -n $TARGET_NS >/dev/null 2>&1 || { echo "SKIP: target service not found in ns $TARGET_NS"; exit 0; }
+SVC_IP=$(kubectl get svc any -n $TARGET_NS -o jsonpath='{.spec.clusterIP}')
+SVC_PORT=$(kubectl get svc any -n $TARGET_NS -o jsonpath='{.spec.ports[0].port}')
+
+echo "=== TEST START ==="
+RESULT=0
+CMD_OUTPUT=""
+EXIT_CODE=""
+for i in 1 2 3 4 5; do
+  CMD_OUTPUT=$(kubectl exec -n $SOURCE_NS $SOURCE_POD -- nc -z -w 3 $SVC_IP $SVC_PORT 2>&1)
+  EXIT_CODE=$?
+  SUCCESS_COND=$( [ $EXIT_CODE -eq 0 ] && echo 1 || echo 0 )
+  if [ $SUCCESS_COND -eq 1 ]; then
+    echo "SUCCESS: Connection behaved as expected."
+    RESULT=1
+    break
+  fi
+  echo "Attempt $i failed. Tool output: $CMD_OUTPUT"
+  sleep 2
+done
+if [ $RESULT -eq 0 ]; then
+  echo "FAIL: Connection did not behave as expected."
+  echo "Last tool output: $CMD_OUTPUT"
+  echo "Last exit code: $EXIT_CODE"
+  exit 1
+fi
+exit 0
+
+--- TEST OUTPUT ---
+SKIP: target service not found in ns default
 

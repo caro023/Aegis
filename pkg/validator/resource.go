@@ -172,11 +172,7 @@ func validateServices(ctx context.Context, k8sClient client.Client, namespace st
 	if err := k8sClient.List(ctx, &services); err != nil {
 		return errors.Errorf("error fetching services: %v", err)
 	}
-	fmt.Printf("[DEBUG validateServices] total services=%d, looking for matchLabels=%v\n",
-		len(services.Items), matchLabels)
 	for _, svc := range services.Items {
-		fmt.Printf("[DEBUG validateServices] svc=%s ns=%s selector=%v\n",
-			svc.Name, svc.Namespace, svc.Spec.Selector)
 		if svc.Spec.Selector == nil {
 			continue
 		}
@@ -188,7 +184,6 @@ func validateServices(ctx context.Context, k8sClient client.Client, namespace st
 			}
 		}
 		if match {
-			fmt.Printf("[DEBUG validateServices] MATCH found: svc=%s\n", svc.Name)
 			return nil
 		}
 	}

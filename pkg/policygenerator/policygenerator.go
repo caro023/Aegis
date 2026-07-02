@@ -62,7 +62,7 @@ func generatePolicy(ctx context.Context, prompts []string, url string, model str
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			return nil, "", fmt.Errorf("failed to decode response JSON: %v", err)
 		}
-		logger.Info("Policy generation succeeded", "Output", result)
+		logger.Info("Policy generation succeeded")
 
 		if result.Yaml == "" {
 			return nil, "", fmt.Errorf("empty yaml field in response")

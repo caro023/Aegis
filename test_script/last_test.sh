@@ -31,6 +31,36 @@ INTENTS=(
 
   "In the test-pods namespace, the pod labeled app=dns-worker uses no networking tools. Allow ingress to dns-worker from all pods on UDP port 53 in the test-pods namespace. Apply the policy to the test-pods namespace."
 
+    # Porta nota dal contesto, namespace omesso
+  "The api-backend needs to call the auth-service to validate tokens before processing requests. Allow that traffic."
+
+  # Pattern classico service-to-service, porta implicita
+  "The payment-service should be able to reach the api-backend."
+
+  # Broker pattern, porta AMQP nota agli ingegneri
+  "Allow the api-backend and the notification-service to publish messages to the message-broker on port 5672."
+
+  # Osservabilità, porta Prometheus standard
+  "The metrics-collector needs to scrape all services in the namespace on port 9090. Allow that."
+
+  # Auth come gateway obbligatorio
+  "Only the api-backend should be allowed to talk to the auth-service. Block everything else."
+
+  # Isolamento parziale con eccezione
+  "The payment-service is sensitive — it should only accept connections from api-backend and auth-service."
+
+  # Notifiche triggered dal backend
+  "After a payment is processed, api-backend sends a notification. Allow egress from api-backend to notification-service."
+
+  # Cache condivisa con policy selettiva
+  "Both api-backend and payment-service use the cache. Only they should be able to reach it on port 6379."
+
+  # Broker accessibile solo internamente
+  "The message-broker should not be reachable from frontend or toolbox, only from backend services."
+
+  # Zero-trust su un servizio critico
+  "Lock down the auth-service: only api-backend and payment-service can call it."
+
   # ================================================================
   # SEZIONE 2: intenti GENERICI / informali (come scritti da un utente
   # non esperto: niente porta, niente protocollo, nomi vaghi, dettagli
