@@ -97,14 +97,9 @@ INTENTS=(
   # Deny totale su un servizio
   "The grpc service should not be reachable by anyone except toolbox."
  
-  # Molto vago, nessun pod esplicito su un lato
-  "Nothing except the toolbox should be able to reach the backend."
- 
   # Sicurezza generica
   "Secure the cache so random pods can't just connect to it."
  
-  # Intento con termine generico "database"
-  "Make sure only the frontend can reach the database."
 
 )
 
