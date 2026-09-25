@@ -1,9 +1,7 @@
 # Image URL to use all building/pushing image targets
 IMG ?= controller:latest
 
-# Default model variable
-MODEL ?= default
-MODE ?= user
+# Default namespace variable
 TEST_NAMESPACE ?= default
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -108,15 +106,12 @@ ui: ## Run the UI for capturing user intents.
 run: manifests generate fmt vet ## Run a controller from your host.
 ifeq ($(MODE),user)
 	@echo "Starting Operator in user mode..."
-	go run ./cmd/main.go --model=$(MODEL) --mode=$(MODE) --test-namespace=$(TEST_NAMESPACE)
+	go run ./cmd/main.go  --test-namespace=$(TEST_NAMESPACE)
 else
 	@echo "Starting Operator in default mode..."
-	go run ./cmd/main.go --model=$(MODEL) --mode=$(MODE) --test-namespace=$(TEST_NAMESPACE)
+	go run ./cmd/main.go  --test-namespace=$(TEST_NAMESPACE)
 endif
 
-.PHONY: finetune
-finetune:
-	./pkg/finetune/autotrain.sh $(MODEL)
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.

@@ -1,161 +1,78 @@
-# KubeTeus
+# Aegis
 
-![kubeteus overviews](./docs/img/kubeteus-overviews.png)
+**Aegis** is a Kubernetes controller that turns **natural-language network intents** into enforced **Cilium/Calico `NetworkPolicy`** resources. Instead of hand-writing YAML network policies, a user describes what they want in natural-text (e.g. *"the api-backend should be able to reach the cache service"*), and Aegis translates that intent into a concrete policy, validates it, applies it to the cluster, and tests that the resulting traffic behavior matches the intent.
 
-KubeTeus is an intent-driven, LLM-powered network policy generation framework for Kubernetes. It enables users to generate and enforce network security policies from natural language prompts or Pod/Deployment Configuration File, without requiring deep knowledge of Kubernetes or CNI specifications.
+## How it works
 
-> This project was presented at **IEEE INFOCOM 2025** as 
-**"KUBETEUS: An Intelligent Network Policy Generation Framework for Containers".**
+The system is organized as a pipeline of packages under `pkg/`, orchestrated by the controller in `internal/controller/`:
 
+The controller exposes an HTTP endpoint (`POST /intent` on `localhost:9090`) that accepts a plain-text intent and runs it through the pipeline above. 
 
-## ✨ Key Features
-- **Intent-Based Generation**: Converts plain English into Kubernetes-compatible network policies using fine-tuned Large Language Models (LLMs). (BLEU ↑ 360%, ROUGE ↑ 233%)
+The CLI UI (`internal/ui/ui.go`) is a client that reads intents from the terminal and posts them to this endpoint.
 
-- **CNI-Agnostic Support**: Supports multiple CNIs (e.g., Calico, Cilium, Kubernetes native), automatically adapting to installed environments.
+## Prerequisites
 
-- **Real-Time Cluster Awareness**: Dynamically queries current resource status to build accurate prompts.
+- **Go** 1.23+ (the module targets Go 1.25; a local Go 1.23.6 tarball is vendored in the repo root for convenience)
+- **Docker**, running — the controller needs to connect to it 
+- A **Kubernetes cluster**. The repo includes [`kind`](https://kind.sigs.k8s.io/) configs for a CNI-aware cluster:
+  - `kind-cilium.yaml` for Cilium
+  - `kind-calico.yaml` for Calico
+- API keys for the LLM backends used by the policy generator:
+  - `GROQ_API_KEY`
+  - `OLLAMA_API_KEY`
+- `make`, `kubectl`
 
-- **Multi-Step Validation**: Prevents misconfiguration with CRD schema check, live resource matching, and policy correctness verification.
+## Setup
 
-- **Automatic Fine-Tuning**: Includes tools for LLM fine-tuning using domain-specific datasets.
+1. Clone the repository.
+2. Export the required API keys:
+   ```bash
+   export GROQ_API_KEY="<your-groq-api-key>"
+   export OLLAMA_API_KEY="<your-ollama-api-key>"
+   ```
+3. Make sure Docker is running.
 
-## 🚀 Getting Started
+## Running
 
-### Prerequisites
-- go version v1.23.0+
-    - ✅ `export PATH=$PATH:/usr/local/go/bin`
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
+Start the controller (server) in one terminal:
 
-### ⚙️ Python Setup
-To use the local entity classifier module and LLM execution server, set up a Python virtual environment and install the required dependencies.
-
-#### 1. Create a Virtual Environment
-```
-$ sudo apt install -y python3-pip python3-venv
-$ python3 -m venv kubeteus
-$ source kubeteus/bin/activate
-```
-
-#### 2. Install Required Libraries
-```
-$ pip install pandas numpy scikit-learn scipy matplotlib flask transformers
+```bash
+make run
 ```
 
-#### 3. Hugging Face Login (Optional, if using private models)
-```
-$ huggingface-cli login
-```
+By default it operates in the `default` namespace. To target a specific namespace instead:
 
-### 🧪 Sample Application Setup
-Deploy a reference microservice app: 
-- Google Cloud's [Online Boutique](https://github.com/GoogleCloudPlatform/microservices-demo)
-- Istio's [Bookinfo Application](https://github.com/istio/istio/blob/master/samples/bookinfo/README.md)
-- Cisco's [Martian Bank](https://github.com/cisco-open/martian-bank-demo)
-
-For Example, 
-```
-$ git clone https://github.com/GoogleCloudPlatform/microservices-demo.git
-$ cd microservices-demo/release
-$ kubectl apply -f kubernetes-manifests.yaml
-$ kubectl get pod
-NAME                                     READY   STATUS    RESTARTS   AGE
-adservice-5b575d9444-plvfq               1/1     Running   0          3m12s
-cartservice-7f7b9fc469-k4sx6             1/1     Running   0          3m13s
-checkoutservice-6bbccb4788-cw66j         1/1     Running   0          3m13s
-currencyservice-795445fcb8-84czn         1/1     Running   0          3m12s
-emailservice-c498b5f8b-6hkwb             1/1     Running   0          3m13s
-frontend-548c468bb9-m6vmc                1/1     Running   0          3m13s
-...
+```bash
+make run TEST_NAMESPACE="test-pods"
 ```
 
-### 🔄 Running KubeTeus
-KubeTeus supports two execution modes:
-- User Mode: Generates network policies from natural language input (intents).
-- Config Mode: Generates policies from the configuration of deployed Kubernetes resources (Pods/Deployments).
+In a second terminal, start the interactive CLI to submit intents:
 
-You can switch between modes using the `MODE` environment variable, and specify the language model using `MODEL`.
-
-#### 📌 Default Behavior
-When you simply run:
-```
-$ make run
+```bash
+make ui
 ```
 
-The following default settings are applied:
-- `MODE=user`
-- `MODEL=default`
-
-The default model internally maps to:
-```
-cclabadmin/codegemma-7b-it-network
-```
-> ⚠️ **Note**: The default model (e.g., `cclabadmin/codegemma-7b-it-network`, `entity_models.bin`) is private and not publicly released. However, we provide the dataset used for fine-tuning and the full training pipeline in this repository, allowing researchers to replicate or adapt the model independently.
-
-#### 🧩 User Mode (Intent-Based Generation)
-In user mode, users can provide natural language prompts via CLI to automatically generate Kubernetes network policies.
+Then type a natural-language intent at the prompt, e.g.:
 
 ```
-$ make run MODEL="cclabadmin/deepseek-coder-7b-instruct" MODE=user
-```
-In a separate terminal, open the CLI UI prompt:
-```
-$ make ui
-```
-You can now input intents like:
-```
-Enter your intent (or type 'q' to quit): 
-Create a policy that allows incoming traffic from endpoint to cartservice pod.
+Enter your intent (or type 'q' to quit): I want the api-backend to be able to reach the cache service.
 ```
 
-#### 🧩 Config Mode (YAML-Based Inference)
-In config mode, the controller extracts configuration from a deployed resource (Pod or Deployment) and generates a corresponding policy:
+Type `q` to exit the UI.
 
-```
-$ make run MODEL="cclabadmin/deepseek-coder-7b-instruct" MODE=config
-```
-in other windows
-```
-$ kubectl apply -f config/examples/nginx1.yaml
-```
+### Batch-testing multiple intents
 
-## 🔧 Auto Fine-Tuning
-KubeTeus provides tools to fine-tune an LLM using your own dataset via the `conf/custom.yaml` file.
-```
-# conf/custom.yaml (example)
-user:
-  huggingface-token: "hf_xxxxxx"
+The `test_script/` folder contains ready-made batches of sample intents at different levels of specificity:
 
-parameter:
-  project-name: kube-teus-tuned
-  data-path: myuser/kube-policy-dataset
-  learning-rate: 2e-4
-  train-batch: 8
-  train-epochs: 3
+- `intenti_generici.sh` – generic intents
+- `intenti_intermedi.sh` – intermediate intents
+- `intenti_specifici.sh` – specific intents
+
+With the controller running (`make run`), execute one of them to send many intents in sequence against the `POST /intent` endpoint:
+
+```bash
+cd test_script
+./intenti_generici.sh
 ```
 
-Example usage:
-```
-$ make finetune MODEL="mistralai/Mistral-7B-Instruct-v0.3"
-```
-
-The fine-tuning uses the AutoTrain API and supports both CPU and GPU environments.
-
-
-## License
-
-Copyright 2025.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
+Results of these runs are logged under `results/` (`passed.txt`, `failed.txt`, `skipped.txt`).

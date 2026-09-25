@@ -12,9 +12,13 @@ import queue
 import signal
 import json
 import yaml
+import time
+
+start = time.time()
 
 app = Flask(__name__)
-VALIDATOR_MODEL = "openai/gpt-oss-120b"
+#VALIDATOR_MODEL = "openai/gpt-oss-120b"
+VALIDATOR_MODEL = "qwen/qwen3.6-27b"
 INTENT_MODEL = "qwen/qwen3.6-27b"
 
 LLM_TIMEOUT_SECONDS = 250
@@ -800,11 +804,8 @@ exit 0
 BLOCKED CONNECTION TEST (only for DENY intents): invert SUCCESS_COND logic above.
 """
 
-GROQ_MODEL = None
-
 def get_args():
     parser = argparse.ArgumentParser(description="Run a Flask server for text generation using Groq API.")
-    parser.add_argument("--model", type=str, required=True, help="Groq model ID to use.")
     parser.add_argument("--port", type=int, required=True, help="Port for the Flask server.")
     parser.add_argument("--test-namespace", type=str, default="default", help="Namespace for test pods and policies")
     return parser.parse_args()
@@ -883,6 +884,11 @@ def translate_intent(intent, client):
         max_tokens=4048,
         timeout=LLM_TIMEOUT_SECONDS,
     )
+    prompt_tokens = completion.usage.prompt_tokens
+    completion_tokens = completion.usage.completion_tokens
+    total_tokens = completion.usage.total_tokens
+
+    print(f"[TOKENS TRANSLATE] prompt={prompt_tokens}, completion={completion_tokens}, total={total_tokens}")
     raw = completion.choices[0].message.content.strip()
 
     cleaned = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL).strip()
@@ -1057,6 +1063,9 @@ def node_validate(state: PolicyState, client) -> PolicyState:
         VALIDATION_PROMPT = VALIDATION_PROMPT_CILIUM
         
     discovery_context = format_pod_discovery(state.get("pod_discovery", []))
+    relevant_pods = [p for p in state.get("pod_discovery", []) 
+                 if p.get("namespace") == TEST_NAMESPACE]
+    discovery_context = format_pod_discovery(relevant_pods)
 
     completion = client.chat.completions.create(
         model=VALIDATOR_MODEL,
@@ -1065,21 +1074,26 @@ def node_validate(state: PolicyState, client) -> PolicyState:
             {"role": "user", "content": (
                 f"INTENT:\n{state['technical_prompt']}\n\n"
                 f"AVAILABLE PODS AND LABELS:\n{discovery_context}\n\n"
-                f"STRUCTURED INTENT: {json.dumps(state['intent_data'])}\n\n"
                 f"YAML:\n{state['yaml_output']}"
             )}
         ],
         temperature=0.0,
         max_tokens=4096,
-        reasoning_format="hidden",
         timeout=LLM_TIMEOUT_SECONDS,
     )
+    prompt_tokens = completion.usage.prompt_tokens
+    completion_tokens = completion.usage.completion_tokens
+    total_tokens = completion.usage.total_tokens
+
+    print(f"[TOKENS VALIDATE] prompt={prompt_tokens}, completion={completion_tokens}, total={total_tokens}")
     raw = extract_yaml(completion.choices[0].message.content.strip())
     if not raw:
         print("[node_validate] validator returned empty output, treating as VALID", flush=True)
         return {**state, "validation_result": "valid", "validation_done": True}
 
     if raw.upper().startswith("VALID"):
+        elapsed = time.time() - start
+        print(f"[LATENCY VALIDATION] {elapsed:.2f}s")
         return {
             **state,
             "validation_result": "valid",
@@ -1123,13 +1137,19 @@ def node_generate(state: PolicyState, client) -> PolicyState:
     messages.append({"role": "user", "content": user_content})
 
     completion = ollama_client.chat(
-        model="minimax-m2.5:cloud",
+        model="gpt-oss:120b-cloud",
         messages=messages,
         options={
             "temperature": 0.4,
             "num_predict": 2024,
         } 
     )
+
+    prompt_tokens = completion.get('prompt_eval_count', 0)
+    completion_tokens = completion.get('eval_count', 0)
+    total_tokens = prompt_tokens + completion_tokens
+
+    print(f"[TOKENS GENERATE] prompt={prompt_tokens}, completion={completion_tokens}, total={total_tokens}")
 
     raw = extract_yaml(completion['message']['content'].strip())
     raw = enforce_namespace(raw, namespace)
@@ -1158,24 +1178,24 @@ def select_tool(tools: list) -> str:
     return "none"
 
 def get_pod_namespace(pod_discovery: list, app_label: str, preferred_ns: str = "default") -> str:
-    # Prima cerca nel namespace preferito
+    # Search in the namespace
     for pod in pod_discovery:
         if (pod.get("labels", {}).get("app") == app_label and
             pod.get("namespace") == preferred_ns):
             return preferred_ns
-    # Fallback: qualsiasi namespace
+    # Fallback: every namespace
     for pod in pod_discovery:
         if pod.get("labels", {}).get("app") == app_label:
             return pod.get("namespace", "default")
     return "default"
 
 def get_source_tools(pod_discovery: list, source_app: str, preferred_ns: str = "default") -> list:
-    # Prima cerca nel namespace preferito
+    # Search in the namespace
     for pod in pod_discovery:
         if (pod.get("labels", {}).get("app") == source_app and
             pod.get("namespace") == preferred_ns):
             return pod.get("availableTools", [])
-    # Fallback: qualsiasi namespace
+    # Fallback: every namespace
     for pod in pod_discovery:
         if pod.get("labels", {}).get("app") == source_app:
             return pod.get("availableTools", [])
@@ -1233,19 +1253,13 @@ def node_testing(state: PolicyState, client) -> PolicyState:
         state.get("pod_discovery", []), source_app, TEST_NAMESPACE)
     tool = select_tool(tools)
 
-  #  print(f"[node_testing] source_app={source_app} ns={source_ns}, "
-   #       f"target_app={target_app} ns={target_ns}, port={port}/{protocol}, "
-    #      f"action={action}, tools={tools}, selected_tool={tool}", flush=True)
-
-
     completion = ollama_client.chat(
-        model="qwen3-coder-next",
+        model="gpt-oss:120b-cloud",
         messages=[
             {"role": "system", "content": TEST_GENERATOR_PROMPT},
             {
                 "role": "user",
                 "content": (
-                   # f"CLUSTER POD INFO:\n{discovery_context}\n\n"
                     f"SOURCE POD APP LABEL: {source_app}\n"
                     f"SOURCE POD NAMESPACE: {source_ns}\n"
                     f"TARGET SERVICE NAME: {target_app}\n"
@@ -1262,6 +1276,11 @@ def node_testing(state: PolicyState, client) -> PolicyState:
         ],
         options={"temperature": 0.1, "num_predict": 4096}
     )
+    prompt_tokens = completion.get('prompt_eval_count', 0)
+    completion_tokens = completion.get('eval_count', 0)
+    total_tokens = prompt_tokens + completion_tokens
+
+    print(f"[TOKENS TESTING] prompt={prompt_tokens}, completion={completion_tokens}, total={total_tokens}")
 
     raw = completion['message']['content'].strip()
     script = extract_script(raw)
@@ -1272,13 +1291,17 @@ def node_join(state: PolicyState) -> PolicyState:
 
 def should_continue(state: PolicyState) -> str:
     if state["validation_result"] == "valid":
-        return "testing"   # prima testa, poi join
+        return "testing"   
+    elapsed = time.time() - start
     if state["iterations"] >= state["max_iterations"]:
-        return "testing"   # best effort, testa comunque
+        print(f"[LATENCY VALIDATION] {elapsed:.2f}s")
+        return "testing"   
     return "generate"
     
 def should_end(state: PolicyState) -> str:
+    elapsed = time.time() - start
     if state.get("validation_done") and state.get("testing_done"):
+        print(f"[LATENCY END STATE] {elapsed:.2f}s")
         return END
     return "wait"
 
@@ -1317,7 +1340,7 @@ def generate():
         return jsonify(result), 200
     except Exception as e:
         import traceback
-        print(f"Error: {traceback.format_exc()}", flush=True)  # ← traceback completo
+        print(f"Error: {traceback.format_exc()}", flush=True)  # traceback completo
         return jsonify({"error": str(e)}), 500
 
 @app.route('/health', methods=['GET'])
@@ -1325,7 +1348,6 @@ def health():
     return jsonify({
         "status": "ok",
         "backend": "groq+ollama",
-        "model": GROQ_MODEL,
         "queue_size": request_queue.qsize(),
         "queue_capacity": 50
     }), 200
@@ -1352,9 +1374,7 @@ signal.signal(signal.SIGINT, shutdown_handler)
 
 if __name__ == "__main__":
     args = get_args()
-    GROQ_MODEL = args.model
     TEST_NAMESPACE = args.test_namespace
     print(f"Starting Flask server with Groq API backend...")
     print(f"Make sure GROQ_API_KEY and OLLAMA_API_KEY environment variable is set")
-    print(f"Using Groq model: {GROQ_MODEL}")
     app.run(host='0.0.0.0', port=args.port)

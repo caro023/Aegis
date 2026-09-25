@@ -11,8 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// RunTestScript scrive lo script su disco, lo esegue e restituisce l'output.
-// Ritorna errore se almeno un test ha stampato "FAIL".
+// RunTestScript write the script and execute it
 func RunTestScript(ctx context.Context, script string) (string, error) {
 	logger := log.FromContext(ctx)
 
@@ -32,10 +31,10 @@ func RunTestScript(ctx context.Context, script string) (string, error) {
 
 	logger.Info("Test script output:\n" + output)
 
-	// ← Controlla se i tool non sono disponibili nel container
+	//Check if the tools are available
 	if isToolUnavailable(output) {
 		logger.Info("WARNING: connectivity tools not available in target containers — skipping tests, policy will be kept")
-		return output, nil // nil = non fare rollback
+		return output, nil //nil -> no rollback
 	}
 
 	if strings.Contains(output, "FAIL") {

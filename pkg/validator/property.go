@@ -18,7 +18,6 @@ func PropertyValidator(ctx context.Context, k8sClient client.Client, policies in
 	var errs []error
 	// logger := log.FromContext(ctx)
 
-	// Converti []string in []interface{} se necessario
 	var policySlice []interface{}
 	switch v := policies.(type) {
 	case []string:
@@ -52,7 +51,6 @@ func PropertyValidator(ctx context.Context, k8sClient client.Client, policies in
 			errs = append(errs, fmt.Errorf("missing or invalid spec in policy"))
 			continue
 		}
-		// logger.Info("spec", "spec", spec)
 
 		namespace, ok := metadata["namespace"].(string)
 		if !ok {

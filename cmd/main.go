@@ -24,8 +24,6 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -41,15 +39,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	"github.com/cclab-inu/KubeTeus/internal/controller"
-	"github.com/cclab-inu/KubeTeus/pkg/utils"
-	// +kubebuilder:scaffold:imports
 )
 
 var (
 	scheme        = runtime.NewScheme()
 	setupLog      = ctrl.Log.WithName("setup")
-	model         string
-	mode          string
 	intent        string
 	testNamespace string
 )
@@ -57,8 +51,6 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
-	flag.StringVar(&model, "model", "default", "Model to use for the controller")
-	flag.StringVar(&mode, "mode", "user", "Mode to use for the controller")
 	flag.StringVar(&testNamespace, "test-namespace", "default", "Namespace for test pods and policies")
 	// +kubebuilder:scaffold:scheme
 }
@@ -98,9 +90,8 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	// define model
-	models := utils.SelectModel(model)
-	networkServerCmd := startPythonServer(models.Network, "5000")
+	// start server
+	networkServerCmd := startPythonServer("5000")
 	if err := networkServerCmd.Start(); err != nil {
 		setupLog.Error(err, "unable to start network model server")
 		os.Exit(1)
@@ -223,8 +214,6 @@ func main() {
 	if err = (&controller.KubeTeusReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
-		Model:         model,   // Passing Model values to the reconciler
-		Mode:          mode,    // Passing Mode values to the reconciler
 		Intent:        &intent, // Passing Intent values to the reconciler
 		HTTPClient:    &http.Client{},
 		TestNamespace: testNamespace,
@@ -266,10 +255,9 @@ func main() {
 	}
 }
 
-func startPythonServer(model, port string) *exec.Cmd {
+func startPythonServer(port string) *exec.Cmd {
 
 	cmd := exec.Command("python3", "pkg/policygenerator/models/server.py",
-		"--model", model,
 		"--port", port,
 		"--test-namespace", testNamespace)
 	cmd.Stdout = os.Stdout

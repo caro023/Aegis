@@ -26,7 +26,6 @@ func Enforcer(ctx context.Context, k8sClient client.Client, policies interface{}
 	}
 
 	for _, policyInterface := range policySlice {
-		// ← ora gestisce multi-documento
 		unstructuredPolicies, err := convertToUnstructuredMulti(policyInterface)
 		if err != nil {
 			return fmt.Errorf("failed to convert policy to unstructured: %v", err)
@@ -40,7 +39,6 @@ func Enforcer(ctx context.Context, k8sClient client.Client, policies interface{}
 	return nil
 }
 
-// convertToUnstructuredMulti gestisce sia singolo YAML che multi-documento (---)
 func convertToUnstructuredMulti(obj interface{}) ([]*unstructured.Unstructured, error) {
 	yamlStr, ok := obj.(string)
 	if !ok {
@@ -138,7 +136,7 @@ func Rollback(ctx context.Context, k8sClient client.Client, policies []string) e
 }
 
 func splitYAMLDocuments(raw string) []string {
-	// Splitta su "---" che separa documenti YAML multipli
+	// Split on "---" that separate documents
 	parts := strings.Split(raw, "\n---")
 	var docs []string
 	for _, p := range parts {

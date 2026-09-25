@@ -29,22 +29,6 @@ func isPodMatch(podName, name string) bool {
 	return strings.HasPrefix(podName, name)
 }
 
-/*
-func isPodMatch(podName, name string) bool {
-	if strings.Contains(podName, name) {
-		podParts := strings.Split(podName, "-")
-		nameParts := strings.Split(name, "-")
-
-		for i := range nameParts {
-			if i >= len(podParts) || podParts[i] != nameParts[i] {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}*/
-
 func listPodsBySelector(ctx context.Context, k8sClient client.Client, selector map[string]string, namespace string) ([]v1.Pod, error) {
 	var podList v1.PodList
 	listOpts := &client.ListOptions{
@@ -189,14 +173,6 @@ func getPodNetInfo(ctx context.Context, k8sClient client.Client, shortPodName, n
 	}
 	return *netInfoPtr, nil
 }
-
-/*func getPodNetInfo(ctx context.Context, k8sClient client.Client, podName, namespace string) (utils.NetInfo, error) {
-	netInfoPtr, err := watcher.GetConfig(ctx, k8sClient, namespace, podName)
-	if err != nil {
-		return utils.NetInfo{}, err
-	}
-	return *netInfoPtr, nil
-}*/
 
 func extractLabel(labels map[string]string) (string, string) {
 	for key, value := range labels {
