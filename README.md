@@ -77,6 +77,19 @@ cd test_script
 
 Results of these runs are logged under `results/` (`passed.txt`, `failed.txt`, `skipped.txt`).
 
+## Acknowledgements
+
+This project originated from [KubeTeus](https://github.com/cclab-inu/KubeTeus), developed by the Cybersecurity Convergence Lab (CCLAB) at Incheon National University.
+
+The original KubeTeus framework provided the starting point and inspiration for the work presented in this repository.
+
+This repository contains a substantially modified and extended implementation developed as part of an academic thesis. The original codebase has undergone changes, including modifications to its architecture and core logic, removal of certain components, and the development of new functionalities and features.
+
+
+**Original project:** [cclab-inu/KubeTeus](https://github.com/cclab-inu/KubeTeus)
+
+**Original research:** [KubeTeus – IEEE INFOCOM 2025](https://cclab.info/papers/2025_kim_infocom.pdf)
+
 ## License
 Copyright 2025.
 
